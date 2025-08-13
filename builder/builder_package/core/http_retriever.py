@@ -1,3 +1,4 @@
+import hashlib
 import os
 import sys
 import json
@@ -6,7 +7,6 @@ import time
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
-from urllib.error import HTTPError
 import pandas as pd
 
 from builder_package.core.cb_user import CBUser
@@ -18,6 +18,7 @@ from builder_package.core.iretriever import IRetriever
 from builder_package.core.logging_config import setup_logging
 import logging
 import requests
+from requests.exceptions import HTTPError
 
 # Setup logging
 setup_logging()
@@ -39,14 +40,17 @@ class HTTPRetriever(IRetriever):
         self.page_size = 100
         self.start_pos = 1
 
-    def retrieve(self) -> Any:
-        if not self.connection.is_authorized():
-            print(f"Entity {self.connection.get_cbid()} is no longer connected")
-            raise Exception(f"Entity {self.connection.get_cbid()} is no longer connected")
+    def try_cache(self) -> Any:
+        if self.save_file_path == 'default':
+            self.save_file_path = f"{self._cache_key()}.jsonl"
+        if self.save_file_path:
+            if os.path.exists(self.save_file_path):
+                with open(self.save_file_path, 'r') as f:
+                    responses = [json.loads(line) for line in f]
+                    return responses
+        return None
         
-        responses = self._call_api()
-        logger.info(f"Retrieved {len(responses)} responses for cache key {self._cache_key()}")
-        # Responses is now an array of JSON objects, save to file as JSON strings
+    def cache(self, responses: List[Dict[str, Any]]) -> None:
         if self.save_file_path == 'default':
             self.save_file_path = f"{self._cache_key()}.jsonl"
         if self.save_file_path:
@@ -55,7 +59,19 @@ class HTTPRetriever(IRetriever):
                 for response in responses:
                     # Convert JSON object to string for file storage
                     f.write(json.dumps(response) + '\n')
+     
+    def retrieve(self) -> Any:
+        if not self.connection.is_authorized():
+            logger.error(f"Entity {self.connection.get_cbid()} is no longer connected")
+            raise Exception(f"Entity {self.connection.get_cbid()} is no longer connected")
         
+        responses = self.try_cache()
+        if responses is None:
+            responses = self._call_api()
+            self.cache(responses)
+        else:
+            logger.info(f"Retrieved {len(responses)} responses from cache for cache key {self._cache_key()}")
+            
         return responses
 
     def get_headers(self)-> Dict[str, str]:
@@ -85,20 +101,18 @@ class HTTPRetriever(IRetriever):
     def _call_api_once(self) -> Tuple[Dict[str, Any], int]:
         url = f"{self.cb_user.base_url}{self._get_endpoint()}"
         params = self._get_params()
-
-        logger.info(
-            f"Making {self.api_summary()} call for entity {self.connection.get_cbid()}"
-            + f" w/ params {params}"
-            + f" start_pos: {self.start_pos}"
-            + f" page_size: {self.page_size}"
-            + f" url: {url}"
-        )
         
         response = requests.get(url, headers=self.get_headers(), params=params)
         response.raise_for_status()
         to_return = self._to_json(response)
 
-        logger.info(f"{self.api_summary()} call for key {self._cache_key()} returned {to_return[1]} items")
+        logger.info(
+            f"{self.api_summary()} call for key {self._cache_key()} returned {to_return[1]} items"
+            + f" url: {url}"
+            + f" params: {params}"
+            + f" start_pos: {self.start_pos}"
+            + f" page_size: {self.page_size}"
+        )
 
         return to_return
 
@@ -142,6 +156,12 @@ class ModelHTTPRetriever(HTTPRetriever, IToolCall):
         self.endpoint = endpoint
         self.params = params
     
+    def is_query_valid(self) -> bool:
+        query = self.params.get('query')
+        # generate code to reject malformed queries, subqueries, joins and aliases
+        # and return False if the query is invalid
+        return True
+    
     def _get_endpoint(self) -> str:
         # Ensure endpoint starts with a forward slash for proper URL construction
         if not self.endpoint.startswith('/'):
@@ -153,10 +173,27 @@ class ModelHTTPRetriever(HTTPRetriever, IToolCall):
     
     def _to_json(self, response: requests.Response) -> Tuple[Dict[str, Any], int]:
         response_json = response.json()
-        return response_json, len(response_json.get('QueryResponse', {}).get('Item', []))
-
+        return (
+            response_json, 
+            len(response_json.get('QueryResponse', {}).get(self.extract_query_response_key(), []))
+        )
+    
+    def extract_query_response_key(self) -> str:
+        query = self.params.get('query')
+        if query:
+            # Find the position of FROM in the original query (case-insensitive)
+            from_index = query.upper().find('FROM')
+            if from_index != -1:
+                # Extract everything after FROM
+                from_part = query[from_index + 4:].strip()
+                # Handle cases where there might be WHERE, ORDER BY, etc. after the table name
+                table_name = from_part.split()[0].strip()
+                return table_name
+        return "Unknown"
+    
     def _cache_key(self) -> str:
-        return f"model_http_retriever_{self.endpoint}_{self.params}"
+        params_hash_6chars = hashlib.sha256(json.dumps(self.params).encode()).hexdigest()[:6]
+        return f"model_http_retriever_{self.endpoint}_{self.extract_query_response_key()}_{params_hash_6chars}"
 
     def api_summary(self) -> str:
         return f"Makes HTTP calls using endpoint and params from the model"
@@ -172,8 +209,8 @@ class ModelHTTPRetriever(HTTPRetriever, IToolCall):
                 )
             return ToolCallResult.success(
                 tool_name=ModelHTTPRetriever.tool_name(),
-                handle_name=self._cache_key(), 
-                data=self.extract_result_summary(responses)
+                file_name=self._cache_key() + ".jsonl", 
+                sample=self.extract_result_summary(responses)
             )
         except HTTPError as e:
             logger.error(f"HTTP error: {e}")
@@ -221,9 +258,9 @@ class ModelHTTPRetriever(HTTPRetriever, IToolCall):
     def extract_result_summary(self, result: Any) -> dict:
         # expect result to be a json object. Generate code to extract it's schema
         if isinstance(result, list) and len(result) > 0:
-            first_result = result[0]['QueryResponse']
+            first_result = result[0]
             return {
-                "description" : f"Did {len(result)} api calls within tool call. Example result shown below.",
-                "example": first_result
+                "description" : f"Did {len(result)} api calls within tool call. Sample result shown below.",
+                "sample": first_result
             }
         raise Exception(f"Expected list of results, got {type(result)}")

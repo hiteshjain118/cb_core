@@ -62,4 +62,21 @@ def setup_logging():
     logging.getLogger('httpx').setLevel(logging.WARNING)
     
     # Set specific logger levels for verbose modules
-    logging.getLogger('builder_package.model_providers.gpt_provider').setLevel(logging.INFO) 
+    logging.getLogger('builder_package.model_providers.gpt_provider').setLevel(logging.INFO)
+    logging.getLogger('builder_package.model_providers').setLevel(logging.INFO)
+    
+    # Suppress debug logs from other potentially verbose modules
+    logging.getLogger('openai').setLevel(logging.WARNING)
+    logging.getLogger('openai.api_requestor').setLevel(logging.WARNING)
+    logging.getLogger('openai.api_client').setLevel(logging.WARNING)
+    
+    # Additional logging suppression for common verbose modules
+    logging.getLogger('botocore').setLevel(logging.WARNING)
+    logging.getLogger('boto3').setLevel(logging.WARNING)
+    logging.getLogger('s3transfer').setLevel(logging.WARNING)
+    logging.getLogger('urllib3.connectionpool').setLevel(logging.WARNING)
+    logging.getLogger('requests.packages.urllib3.connectionpool').setLevel(logging.WARNING)
+    
+    # Ensure no debug logs can get through
+    logging.getLogger('').setLevel(logging.INFO)
+    logging.getLogger('root').setLevel(logging.INFO) 

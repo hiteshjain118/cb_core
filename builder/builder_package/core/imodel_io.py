@@ -24,7 +24,7 @@ class IModelPrompt(ABC):
             'role': 'tool',
             'tool_call_id': tool_call_id,
             'name': tool_call_result.tool_name,
-            'content': json.dumps(tool_call_result.to_json_wo_content()),
+            'content': json.dumps(tool_call_result.to_dict()),
         }
     
 class IModelOutputParser(ABC):
