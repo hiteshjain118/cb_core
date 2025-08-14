@@ -166,7 +166,7 @@ class PythonFunctionRunner(IToolCall):
         except Exception as e:
             return ToolCallResult.error(
                 tool_name=self.tool_name(),
-                error_type="InternalError",
+                error_type=type(e).__name__,
                 error_message=f"Error executing Python code: {str(e)}"
             )
         
