@@ -67,10 +67,13 @@ class QBModelOutputParser(IModelOutputParser):
         self.tool_calls: dict[str, ToolCallResult] = None
         self.message: ChatCompletionMessage = None
         self.tool_call_runner = tool_call_runner
+        self.attachments = []
 
     def set_success(self, message: ChatCompletionMessage) -> Self:
         self.message = message
         self.response_content = message.content
+        # self.response_content = message.content["response_content"]
+        # self.attachments = message.content.get("attachments", [])
         if message.tool_calls is not None:
             self.tool_calls = {}
             for tool_call in message.tool_calls:
@@ -91,6 +94,7 @@ class QBModelOutputParser(IModelOutputParser):
         return {
             "is_successful": self.response_content is not None and len(self.response_content) > 0 and self.error_reason is None,
             "response_content": self.response_content,
+            "attachments": self.attachments,
             "error_reason": self.error_reason,
             "tool_calls": self.tool_calls,
         }

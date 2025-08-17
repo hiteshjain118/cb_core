@@ -17,7 +17,6 @@ class PythonFunctionRunner(IToolCall):
             analyze_function_code: str,
             # argument_handles: dict[str, str]
         ):
-        assert ('def analyze' in analyze_function_code), "function name must be 'analyze'"
         self.analyze_function_code = analyze_function_code
         # self.argument_handles = argument_handles
 
@@ -65,7 +64,15 @@ class PythonFunctionRunner(IToolCall):
             "super": super,
             "property": property,
             "staticmethod": staticmethod,
-            "classmethod": classmethod
+            "classmethod": classmethod,
+            "Exception": Exception,
+            "KeyError": KeyError,
+            "ValueError": ValueError,
+            "TypeError": TypeError,
+            "AttributeError": AttributeError,
+            "IndexError": IndexError,
+            "StopIteration": StopIteration,
+            "ZeroDivisionError": ZeroDivisionError,
         }
         namespace_globals = {
             "__builtins__": safe_builtins,
@@ -130,7 +137,7 @@ class PythonFunctionRunner(IToolCall):
         # Fix any double pd.pd issues
         modified_code = modified_code.replace("pd.pd.json_normalize", "pd.json_normalize")
         
-        logger.info(f"Original code:\n{self.analyze_function_code}")
+        # logger.info(f"Original code:\n{self.analyze_function_code}")
         logger.info(f"Modified code:\n{modified_code}")
         
         exec(modified_code, namespace_globals, namespace_locals)

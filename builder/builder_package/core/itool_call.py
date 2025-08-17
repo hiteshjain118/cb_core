@@ -68,6 +68,19 @@ class ToolCallResult:
 
         return json_wo_content
 
+    def to_dict_w_truncated_content(self) -> dict:
+        json_wo_content = self.to_dict_wo_content()
+
+        if self.status == "success":
+            if self.data is not None:
+                json_wo_content["content"]["data"] = self.data if len(self.data) < 100 else f"{self.data[:100]}...{len(self.data)}"
+            elif self.sample is not None:
+                json_wo_content["content"]["sample"] = self.sample if len(self.sample) < 100 else f"{self.sample[:100]}...{len(self.sample)}"
+            else:
+                raise ValueError("data or sample must be provided")
+
+        return json_wo_content
+
     def to_dict_wo_content(self) -> dict:
         if self.status is None:
             raise Exception("Tool call result is not set")

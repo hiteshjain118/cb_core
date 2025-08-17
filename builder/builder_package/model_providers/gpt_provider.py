@@ -8,12 +8,6 @@ from builder_package.model_providers.imodel_provider import IModelProvider
 
 # Create module-specific logger
 logger = logging.getLogger(__name__)
-# Ensure debug logging is turned off for this module
-logger.setLevel(logging.INFO)
-# Also disable debug logging for the parent logger to be extra sure
-logging.getLogger('builder_package.model_providers').setLevel(logging.INFO)
-# Additional safeguard - disable debug logging for the entire openai module
-logging.getLogger('openai').setLevel(logging.WARNING)
 
 
 class GPTProvider(IModelProvider):

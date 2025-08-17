@@ -62,8 +62,8 @@ def setup_logging():
     logging.getLogger('httpx').setLevel(logging.WARNING)
     
     # Set specific logger levels for verbose modules
-    logging.getLogger('builder_package.model_providers.gpt_provider').setLevel(logging.INFO)
-    logging.getLogger('builder_package.model_providers').setLevel(logging.INFO)
+    logging.getLogger('builder_package.model_providers.gpt_provider').setLevel(logging.WARNING)
+    logging.getLogger('builder_package.model_providers').setLevel(logging.WARNING)
     
     # Suppress debug logs from other potentially verbose modules
     logging.getLogger('openai').setLevel(logging.WARNING)

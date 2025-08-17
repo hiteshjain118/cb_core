@@ -17,7 +17,7 @@ from typing import Any
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from builder_package.core.http_retriever import ModelHTTPRetriever
+from builder_package.core.qb_user_data_retriever import ModelHTTPRetriever
 from builder_package.core.itool_call import ToolCallResult
 from builder_package.core.iauthenticator import IHTTPConnection
 from builder_package.core.cb_user import CBUser
