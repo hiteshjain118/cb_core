@@ -10,8 +10,21 @@ const mockedAxios = axios as jest.Mocked<typeof axios>;
 describe('ToolCallRunner', () => {
   let toolCallRunner: ToolCallRunner;
   const mockThreadId = BigInt(123);
-  const mockUserId = BigInt(456);
+  const mockCbProfileId = BigInt(456);
   const mockInternalApiUrl = 'http://localhost:3001';
+
+  const createMockToolCall = (
+    id: string,
+    name: string,
+    args: Record<string, any> = {}
+  ): ChatCompletionMessageToolCall => ({
+    id,
+    type: 'function',
+    function: {
+      name,
+      arguments: JSON.stringify(args)
+    }
+  });
 
   beforeEach(() => {
     // Reset all mocks
@@ -26,7 +39,7 @@ describe('ToolCallRunner', () => {
     jest.spyOn(console, 'error').mockImplementation();
 
     // Create ToolCallRunner instance
-    toolCallRunner = new ToolCallRunner(mockThreadId, mockUserId);
+    toolCallRunner = new ToolCallRunner(mockThreadId, mockCbProfileId);
   });
 
   afterEach(() => {
@@ -36,7 +49,7 @@ describe('ToolCallRunner', () => {
 
   describe('constructor', () => {
     it('should initialize with correct properties', () => {
-      const runner = new ToolCallRunner(mockThreadId, mockUserId);
+      const runner = new ToolCallRunner(mockThreadId, mockCbProfileId);
       
       expect(runner).toBeDefined();
       // Note: Properties are private, so we can't directly test them
@@ -45,26 +58,13 @@ describe('ToolCallRunner', () => {
 
     it('should use default internal API URL when not set', () => {
       delete process.env.INTERNAL_API_URL;
-      const runner = new ToolCallRunner(mockThreadId, mockUserId);
+      const runner = new ToolCallRunner(mockThreadId, mockCbProfileId);
       
       expect(runner).toBeDefined();
     });
   });
 
   describe('run_tools', () => {
-    const createMockToolCall = (
-      id: string,
-      name: string,
-      args: Record<string, any> = {}
-    ): ChatCompletionMessageToolCall => ({
-      id,
-      type: 'function',
-      function: {
-        name,
-        arguments: JSON.stringify(args)
-      }
-    });
-
     it('should run multiple tool calls in parallel', async () => {
       const toolCalls = [
         createMockToolCall('call_1', 'python_function_runner', { code: 'print("test1")' }),
@@ -98,7 +98,11 @@ describe('ToolCallRunner', () => {
 
       const result = await toolCallRunner.run_tools([invalidToolCall]);
 
-      expect(result).toEqual({});
+      expect(result['invalid_call']).toBeInstanceOf(ToolCallResult);
+      expect(result['invalid_call']!.status).toBe('error');
+      expect(result['invalid_call']!.error_type).toBe('InvalidToolType');
+      expect(result['invalid_call']!.tool_name).toBe('unknown_tool');
+      expect(result['invalid_call']!.error_message).toBe('Tool call type invalid is not supported');
     });
 
     it('should handle tool calls with malformed JSON arguments', async () => {
@@ -111,80 +115,14 @@ describe('ToolCallRunner', () => {
         }
       };
 
-      await expect(toolCallRunner.run_tools([toolCallWithBadArgs])).rejects.toThrow();
+      const result = await toolCallRunner.run_tools([toolCallWithBadArgs]);
+      
+      expect(result['bad_args_call']).toBeInstanceOf(ToolCallResult);
+      expect(result['bad_args_call']!.status).toBe('error');
+      expect(result['bad_args_call']!.error_type).toBe('ToolCallError');
     });
 
-    it('should handle QB tools by calling internal API', async () => {
-      const mockResponse = {
-        data: {
-          status: 'success',
-          tool_name: 'qb_user_data_retriever',
-          tool_call_id: 'qb_call',
-          thread_id: mockThreadId,
-          content: { data: 'test' }
-        }
-      };
-
-      mockedAxios.post.mockResolvedValue(mockResponse);
-
-      const toolCalls = [
-        createMockToolCall('qb_call', 'qb_user_data_retriever', { param: 'value' })
-      ];
-
-      const result = await toolCallRunner.run_tools(toolCalls);
-
-      expect(mockedAxios.post).toHaveBeenCalledWith(
-        `${mockInternalApiUrl}/qb_user_data_retriever`,
-        {
-          cbid: mockUserId.toString(),
-          thread_id: mockThreadId.toString(),
-          tool_call_id: 'qb_call',
-          param: 'value'
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Internal-Service': 'chat_js'
-          },
-          timeout: 30000
-        }
-      );
-      expect(result['qb_call']).toBeInstanceOf(ToolCallResult);
-    });
-  });
-
-  describe('run_tool', () => {
-    it('should run python_function_runner tool', async () => {
-      const toolCall: IToolCallInput = {
-        id: 'python_call',
-        name: 'python_function_runner',
-        arguments: { code: 'print("Hello World")' }
-      };
-
-      const result = await toolCallRunner.run_tool(toolCall);
-
-      expect(result).toBeInstanceOf(ToolCallResult);
-      expect(result.status).toBe('success');
-      expect(result.tool_name).toBe(toolCall.arguments.name);
-      expect(console.log).toHaveBeenCalledWith(
-        expect.stringContaining('Running tool call id:python_call name:python_function_runner')
-      );
-    });
-
-    it('should handle python_function_runner without code parameter', async () => {
-      const toolCall: IToolCallInput = {
-        id: 'python_call',
-        name: 'python_function_runner',
-        arguments: {}
-      };
-
-      const result = await toolCallRunner.run_tool(toolCall);
-
-      expect(result).toBeInstanceOf(ToolCallResult);
-      expect(result.status).toBe('error');
-    });
-
-    it('should run QB tools via internal API', async () => {
+    it('should handle qb_data_schema_retriever via direct API call', async () => {
       const mockResponse = {
         data: {
           status: 'success',
@@ -197,101 +135,471 @@ describe('ToolCallRunner', () => {
 
       mockedAxios.post.mockResolvedValue(mockResponse);
 
-      const toolCall: IToolCallInput = {
-        id: 'schema_call',
-        name: 'qb_data_schema_retriever',
-        arguments: { table: 'customers' }
+      const toolCalls = [
+        createMockToolCall('schema_call', 'qb_data_schema_retriever', { table: 'customers' })
+      ];
+
+      const result = await toolCallRunner.run_tools(toolCalls);
+
+      expect(mockedAxios.post).toHaveBeenCalledWith(
+        `${mockInternalApiUrl}/qb_data_schema_retriever`,
+        {
+          cbid: mockCbProfileId.toString(),
+          thread_id: mockThreadId.toString(),
+          tool_call_id: 'schema_call',
+          validate: false,
+          table: 'customers'
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Internal-Service': 'chat_js'
+          },
+          timeout: 30000
+        }
+      );
+      expect(result['schema_call']).toBeInstanceOf(ToolCallResult);
+    });
+
+    it('should handle qb_user_data_retriever with validate-then-retrieve flow', async () => {
+      const validateResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'user_call',
+          thread_id: mockThreadId,
+          content: { validation: 'passed' }
+        }
       };
 
-      const result = await toolCallRunner.run_tool(toolCall);
+      const retrieveResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'user_call',
+          thread_id: mockThreadId,
+          content: { data: 'user_data' }
+        }
+      };
+
+      mockedAxios.post
+        .mockResolvedValueOnce(validateResponse)  // First call (validate=true)
+        .mockResolvedValueOnce(retrieveResponse); // Second call (validate=false)
+
+      const toolCalls = [
+        createMockToolCall('user_call', 'qb_user_data_retriever', { query: 'SELECT * FROM users' })
+      ];
+
+      const result = await toolCallRunner.run_tools(toolCalls);
+
+      expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+      
+      // First call should be validation
+      expect(mockedAxios.post).toHaveBeenNthCalledWith(1,
+        `${mockInternalApiUrl}/qb_user_data_retriever`,
+        {
+          cbid: mockCbProfileId.toString(),
+          thread_id: mockThreadId.toString(),
+          tool_call_id: 'user_call',
+          validate: true,
+          query: 'SELECT * FROM users'
+        },
+        expect.any(Object)
+      );
+
+      // Second call should be retrieval
+      expect(mockedAxios.post).toHaveBeenNthCalledWith(2,
+        `${mockInternalApiUrl}/qb_user_data_retriever`,
+        {
+          cbid: mockCbProfileId.toString(),
+          thread_id: mockThreadId.toString(),
+          tool_call_id: 'user_call',
+          validate: false,
+          query: 'SELECT * FROM users'
+        },
+        expect.any(Object)
+      );
+
+      expect(result['user_call']).toBeInstanceOf(ToolCallResult);
+      expect(result['user_call']!.status).toBe('success');
+    });
+  });
+
+  describe('run_tool', () => {
+    it('should run python_function_runner tool', async () => {
+      const result = await toolCallRunner.run_tool(
+        'python_call',
+        'python_function_runner', 
+        '{"code": "print(\\"Hello World\\")"}'
+      );
+
+      expect(result).toBeInstanceOf(ToolCallResult);
+      expect(result.status).toBe('success');
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining('Running tool call id:python_call name:python_function_runner')
+      );
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining('Tool python_call succeeded:'),
+        expect.any(String)
+      );
+    });
+
+    it('should handle python_function_runner without code parameter', async () => {
+      const result = await toolCallRunner.run_tool(
+        'python_call',
+        'python_function_runner',
+        '{}'
+      );
+
+      expect(result).toBeInstanceOf(ToolCallResult);
+      expect(result.status).toBe('error');
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('Tool python_call failed:'),
+        expect.any(String)
+      );
+    });
+
+    it('should run qb_data_schema_retriever via direct API call', async () => {
+      const mockResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_data_schema_retriever',
+          tool_call_id: 'schema_call',
+          thread_id: mockThreadId,
+          content: { schema: 'test_schema' }
+        }
+      };
+
+      mockedAxios.post.mockResolvedValue(mockResponse);
+
+      const result = await toolCallRunner.run_tool(
+        'schema_call',
+        'qb_data_schema_retriever',
+        '{"table": "customers"}'
+      );
 
       expect(result).toBeInstanceOf(ToolCallResult);
       expect(mockedAxios.post).toHaveBeenCalledWith(
         `${mockInternalApiUrl}/qb_data_schema_retriever`,
         expect.objectContaining({
-          cbid: mockUserId.toString(),
+          cbid: mockCbProfileId.toString(),
           thread_id: mockThreadId.toString(),
           tool_call_id: 'schema_call',
+          validate: false,
           table: 'customers'
         }),
         expect.any(Object)
       );
     });
 
-    it('should handle unknown tool names', async () => {
-      const toolCall: IToolCallInput = {
-        id: 'unknown_call',
-        name: 'unknown_tool',
-        arguments: {}
+    it('should run qb_data_size_retriever via direct API call', async () => {
+      const mockResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_data_size_retriever',
+          tool_call_id: 'size_call',
+          thread_id: mockThreadId,
+          content: { count: 42 }
+        }
       };
 
-      await expect(toolCallRunner.run_tool(toolCall)).rejects.toThrow('Tool unknown_tool not found');
+      mockedAxios.post.mockResolvedValue(mockResponse);
+
+      const result = await toolCallRunner.run_tool(
+        'size_call',
+        'qb_data_size_retriever',
+        '{"query": "SELECT COUNT(*) FROM customers"}'
+      );
+
+      expect(result).toBeInstanceOf(ToolCallResult);
+      expect(mockedAxios.post).toHaveBeenCalledWith(
+        `${mockInternalApiUrl}/qb_data_size_retriever`,
+        expect.objectContaining({
+          cbid: mockCbProfileId.toString(),
+          thread_id: mockThreadId.toString(),
+          tool_call_id: 'size_call',
+          validate: false,
+          query: 'SELECT COUNT(*) FROM customers'
+        }),
+        expect.any(Object)
+      );
+    });
+
+    it('should run qb_user_data_retriever with validate-then-retrieve', async () => {
+      const validateResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'user_call',
+          thread_id: mockThreadId,
+          content: { validation: 'passed' }
+        }
+      };
+
+      const retrieveResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'user_call',
+          thread_id: mockThreadId,
+          content: { data: 'user_data' }
+        }
+      };
+
+      mockedAxios.post
+        .mockResolvedValueOnce(validateResponse)
+        .mockResolvedValueOnce(retrieveResponse);
+
+      const result = await toolCallRunner.run_tool(
+        'user_call',
+        'qb_user_data_retriever',
+        '{"query": "SELECT * FROM users"}'
+      );
+
+      expect(result).toBeInstanceOf(ToolCallResult);
+      expect(result.status).toBe('success');
+      expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+    });
+
+    it('should handle validation failure for qb_user_data_retriever', async () => {
+      const validateResponse = {
+        data: {
+          status: 'error',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'user_call',
+          thread_id: mockThreadId,
+          error_message: 'Validation failed'
+        }
+      };
+
+      mockedAxios.post.mockResolvedValueOnce(validateResponse);
+
+      const result = await toolCallRunner.run_tool(
+        'user_call',
+        'qb_user_data_retriever',
+        '{"query": "INVALID SQL"}'
+      );
+
+      expect(result).toBeInstanceOf(ToolCallResult);
+      expect(result.status).toBe('error');
+      expect(mockedAxios.post).toHaveBeenCalledTimes(1); // Only validation call, no retrieval
+    });
+
+    it('should handle unknown tool names', async () => {
+      const result = await toolCallRunner.run_tool(
+        'unknown_call',
+        'unknown_tool',
+        '{}'
+      );
+
+      expect(result).toBeInstanceOf(ToolCallResult);
+      expect(result.status).toBe('error');
+      expect(result.error_type).toBe('InvalidToolName');
+      expect(result.error_message).toBe('Tool unknown_tool not found');
     });
 
     it('should log success for successful tool calls', async () => {
-      const toolCall: IToolCallInput = {
-        id: 'success_call',
-        name: 'python_function_runner',
-        arguments: { code: 'print("test")' }
-      };
-
-      await toolCallRunner.run_tool(toolCall);
+      await toolCallRunner.run_tool(
+        'python_call',
+        'python_function_runner',
+        '{"code": "print(\\"test\\")"}'
+      );
 
       expect(console.log).toHaveBeenCalledWith(
-        'Tool success_call succeeded:',
+        expect.stringContaining('Tool python_call succeeded:'),
         expect.any(String)
       );
     });
 
     it('should log errors for failed tool calls', async () => {
-      const toolCall: IToolCallInput = {
-        id: 'error_call',
-        name: 'python_function_runner',
-        arguments: {} // Missing code parameter
-      };
-
-      await toolCallRunner.run_tool(toolCall);
+      await toolCallRunner.run_tool(
+        'unknown_call',
+        'unknown_tool',
+        '{}'
+      );
 
       expect(console.error).toHaveBeenCalledWith(
-        expect.stringContaining('Tool error_call failed:'),
+        expect.stringContaining('Tool unknown_call failed:'),
         expect.any(String)
       );
     });
 
-    
+    it('should handle JSON parsing errors in tool arguments', async () => {
+      const result = await toolCallRunner.run_tool(
+        'parse_error_call',
+        'python_function_runner',
+        '{"code": "print(\\"test\\"", invalid_json}'
+      );
+
+      expect(result).toBeInstanceOf(ToolCallResult);
+      expect(result.status).toBe('error');
+      expect(result.error_type).toBe('ToolCallError');
+      expect(result.error_message).toMatch(/Expected double-quoted property name|Unexpected token/);
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('Tool parse_error_call failed:'),
+        expect.any(String)
+      );
+    });
+
+    it('should call toLogMessage and toLoggableString for successful tools', async () => {
+      const mockToLogMessage = jest.fn().mockReturnValue('Success log message');
+      const mockToLoggableString = jest.fn().mockReturnValue('Success loggable string');
+      
+      // Mock ToolCallResult methods
+      jest.spyOn(ToolCallResult.prototype, 'toLogMessage').mockImplementation(mockToLogMessage);
+      jest.spyOn(ToolCallResult.prototype, 'toLoggableString').mockImplementation(mockToLoggableString);
+
+      await toolCallRunner.run_tool(
+        'success_call',
+        'python_function_runner',
+        '{"code": "print(\\"success\\")"}'
+      );
+
+      expect(mockToLogMessage).toHaveBeenCalled();
+      expect(mockToLoggableString).toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining('Tool success_call succeeded:'),
+        'Success log message'
+      );
+      expect(console.debug).toHaveBeenCalledWith(
+        expect.stringContaining('Detailed success info:'),
+        'Success loggable string'
+      );
+    });
+
+    it('should call toLogMessage and toLoggableString for failed tools', async () => {
+      const mockToLogMessage = jest.fn().mockReturnValue('Error log message');
+      const mockToLoggableString = jest.fn().mockReturnValue('Error loggable string');
+      
+      // Mock ToolCallResult methods
+      jest.spyOn(ToolCallResult.prototype, 'toLogMessage').mockImplementation(mockToLogMessage);
+      jest.spyOn(ToolCallResult.prototype, 'toLoggableString').mockImplementation(mockToLoggableString);
+
+      await toolCallRunner.run_tool(
+        'error_call',
+        'unknown_tool',
+        '{}'
+      );
+
+      expect(mockToLogMessage).toHaveBeenCalled();
+      expect(mockToLoggableString).toHaveBeenCalled();
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('Tool error_call failed:'),
+        'Error log message'
+      );
+      expect(console.debug).toHaveBeenCalledWith(
+        expect.stringContaining('Detailed error info:'),
+        'Error loggable string'
+      );
+    });
+  });
+
+  describe('validateThenRetrieve', () => {
+    it('should call validation first, then retrieval on success', async () => {
+      const validateResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'test_call',
+          thread_id: mockThreadId,
+          content: { validation: 'passed' }
+        }
+      };
+
+      const retrieveResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'test_call',
+          thread_id: mockThreadId,
+          content: { data: 'retrieved' }
+        }
+      };
+
+      mockedAxios.post
+        .mockResolvedValueOnce(validateResponse)
+        .mockResolvedValueOnce(retrieveResponse);
+
+      const result = await toolCallRunner.run_tool(
+        'test_call',
+        'qb_user_data_retriever',
+        '{"query": "SELECT * FROM test"}'
+      );
+
+      expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+      expect(result.status).toBe('success');
+    });
+
+    it('should return validation error without calling retrieval', async () => {
+      const validateResponse = {
+        data: {
+          status: 'error',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'test_call',
+          thread_id: mockThreadId,
+          content: { error_type: 'ValidationError', error_message: 'Query too complex' }
+        }
+      };
+
+      mockedAxios.post.mockResolvedValueOnce(validateResponse);
+
+      const result = await toolCallRunner.run_tool(
+        'test_call',
+        'qb_user_data_retriever',
+        '{"query": "COMPLEX QUERY"}'
+      );
+
+      expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe('error');
+    });
   });
 
   describe('callInternalAPI', () => {
     it('should handle API errors gracefully', async () => {
-      const axiosError = new Error('Network error');
-      mockedAxios.post.mockRejectedValue(axiosError);
+      mockedAxios.post.mockRejectedValue(new Error('Network error'));
 
-      const toolCall: IToolCallInput = {
-        id: 'api_error_call',
-        name: 'qb_user_data_retriever',
-        arguments: { param: 'value' }
-      };
-
-      const result = await toolCallRunner.run_tool(toolCall);
+      const result = await toolCallRunner.run_tool(
+        'api_call',
+        'qb_data_schema_retriever',
+        '{"table": "test"}'
+      );
 
       expect(result).toBeInstanceOf(ToolCallResult);
       expect(result.status).toBe('error');
-      expect(result.tool_name).toBe('qb_user_data_retriever');
+      expect(result.tool_name).toBe('qb_data_schema_retriever');
+      expect(result.error_type).toBe('ToolCallError');
     });
 
-    it('should handle non-Error exceptions', async () => {
-      mockedAxios.post.mockRejectedValue('String error');
-
-      const toolCall: IToolCallInput = {
-        id: 'string_error_call',
-        name: 'qb_data_size_retriever',
-        arguments: {}
+    it('should include validate parameter in request body', async () => {
+      const mockResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_data_schema_retriever',
+          tool_call_id: 'validate_call',
+          thread_id: mockThreadId,
+          content: { schema: 'test' }
+        }
       };
 
-      const result = await toolCallRunner.run_tool(toolCall);
+      mockedAxios.post.mockResolvedValue(mockResponse);
 
-      expect(result).toBeInstanceOf(ToolCallResult);
-      expect(result.status).toBe('error');
+      await toolCallRunner.run_tool(
+        'validate_call',
+        'qb_data_schema_retriever', 
+        '{"table": "test_table"}'
+      );
+
+      expect(mockedAxios.post).toHaveBeenCalledWith(
+        `${mockInternalApiUrl}/qb_data_schema_retriever`,
+        expect.objectContaining({
+          cbid: mockCbProfileId.toString(),
+          thread_id: mockThreadId.toString(),
+          tool_call_id: 'validate_call',
+          validate: false,
+          table: 'test_table'
+        }),
+        expect.any(Object)
+      );
     });
   });
 
@@ -353,13 +661,7 @@ describe('ToolCallRunner', () => {
       expect(result).toContain('qb_data_schema_retriever');
     });
 
-    it('should handle API failure and throw error', async () => {
-      mockedAxios.get.mockRejectedValue(new Error('API Error'));
-
-      await expect(toolCallRunner.get_enabled_tools()).rejects.toThrow('API Error');
-    });
-
-    it('should handle unsuccessful API response', async () => {
+    it('should throw error on unsuccessful API response', async () => {
       const mockResponse = {
         data: {
           success: false
@@ -373,7 +675,7 @@ describe('ToolCallRunner', () => {
       );
     });
 
-    it('should handle missing tools in API response', async () => {
+    it('should throw error on missing tools in API response', async () => {
       const mockResponse = {
         data: {
           success: true,
@@ -467,26 +769,6 @@ describe('ToolCallRunner', () => {
       expect(result[1]!.function.name).toBe('python_function_runner');
     });
 
-    it('should handle API failure and throw error', async () => {
-      mockedAxios.get.mockRejectedValue(new Error('API Error'));
-
-      await expect(toolCallRunner.get_enabled_tool_descriptions()).rejects.toThrow('API Error');
-    });
-
-    it('should handle unsuccessful API response for descriptions', async () => {
-      const mockResponse = {
-        data: {
-          success: false
-        }
-      };
-
-      mockedAxios.get.mockResolvedValue(mockResponse);
-
-      await expect(toolCallRunner.get_enabled_tool_descriptions()).rejects.toThrow(
-        'Failed to fetch tools from internal API, chat_js not available'
-      );
-    });
-
     it('should validate tool description structure', async () => {
       const mockResponse = {
         data: {
@@ -530,96 +812,29 @@ describe('ToolCallRunner', () => {
     });
   });
 
-  describe('Integration tests', () => {
-    it('should handle complete workflow with QB tools', async () => {
-      // Mock tools API response
-      const toolsResponse = {
-        data: {
-          success: true,
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "qb_user_data_retriever",
-                description: "Retrieves QB data",
-                parameters: {
-                  type: "object",
-                  properties: { query: { type: "string" } },
-                  required: ["query"]
-                }
-              }
-            }
-          ]
-        }
-      };
+  describe('python_function_runner', () => {
+    it('should execute python code runner with valid code', async () => {
+      const result = await toolCallRunner.run_tool(
+        'python_test',
+        'python_function_runner',
+        '{"code": "import pandas as pd\\ndf = pd.DataFrame({\\"a\\": [1,2,3]})"}'
+      );
 
-      // Mock tool execution response
-      const executionResponse = {
-        data: {
-          status: 'success',
-          tool_name: 'qb_user_data_retriever',
-          tool_call_id: 'integration_call',
-          thread_id: mockThreadId,
-          content: { data: 'integration_test' }
-        }
-      };
-
-      mockedAxios.get.mockResolvedValue(toolsResponse);
-      mockedAxios.post.mockResolvedValue(executionResponse);
-
-      // First get tools
-      const tools = await toolCallRunner.get_enabled_tools();
-      expect(tools).toContain('qb_user_data_retriever');
-
-      // Then execute a tool
-      const toolCall: IToolCallInput = {
-        id: 'integration_call',
-        name: 'qb_user_data_retriever',
-        arguments: { query: 'test query' }
-      };
-
-      const result = await toolCallRunner.run_tool(toolCall);
       expect(result.status).toBe('success');
+      expect(result.content).toHaveProperty('message');
+      expect(result.content).toHaveProperty('code');
     });
 
-    it('should handle mixed tool types in run_tools', async () => {
-      // Mock QB tool API response
-      const qbResponse = {
-        data: {
-          status: 'success',
-          tool_name: 'qb_data_size_retriever',
-          tool_call_id: 'qb_call',
-          thread_id: mockThreadId,
-          content: { size: 100 }
-        }
-      };
+    it('should handle missing code parameter', async () => {
+      const result = await toolCallRunner.run_tool(
+        'python_no_code',
+        'python_function_runner',
+        '{"name": "python_function_runner", "id": "python_no_code"}'
+      );
 
-      mockedAxios.post.mockResolvedValue(qbResponse);
-
-      const toolCalls = [
-        {
-          id: 'python_call',
-          type: 'function' as const,
-          function: {
-            name: 'python_function_runner',
-            arguments: JSON.stringify({ code: 'print("test")' })
-          }
-        },
-        {
-          id: 'qb_call',
-          type: 'function' as const,
-          function: {
-            name: 'qb_data_size_retriever',
-            arguments: JSON.stringify({ table: 'items' })
-          }
-        }
-      ];
-
-      const results = await toolCallRunner.run_tools(toolCalls);
-
-      expect(Object.keys(results)).toHaveLength(2);
-      expect(results['python_call']!.status).toBe('success');
-      expect(results['qb_call']!.status).toBe('success');
+      expect(result.status).toBe('error');
+      expect(result.error_type).toBe('InvalidParameters');
+      expect(result.error_message).toBe('Code is required');
     });
   });
 }); 

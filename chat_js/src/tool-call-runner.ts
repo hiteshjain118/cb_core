@@ -1,13 +1,12 @@
 import { 
   ToolCallResult,
-  IToolCallInput,
 } from 'coralbricks-common';
 import { ChatCompletionMessageCustomToolCall, ChatCompletionMessageToolCall } from 'openai/resources/chat/completions';
 import axios from 'axios';
 
 export class ToolCallRunner {
   private threadId: bigint;
-  private userId: bigint;
+  private cbProfileId: bigint;
   private internalApiUrl: string;
   private enabledTools: string[];
   private enabledToolDescriptions: Array<{
@@ -22,9 +21,9 @@ export class ToolCallRunner {
       };
     };
   }>;
-  constructor(thread_id: bigint, user_id: bigint) {
+  constructor(thread_id: bigint, cb_profile_id: bigint) {
     this.threadId = thread_id;
-    this.userId = user_id;
+    this.cbProfileId = cb_profile_id;
     this.internalApiUrl = process.env.INTERNAL_API_URL || 'http://localhost:3001';
     this.enabledTools = [];
     this.enabledToolDescriptions = [];
@@ -34,18 +33,21 @@ export class ToolCallRunner {
     const tool_calls: Record<string, ToolCallResult> = {};
     
     // Create an array of promises for parallel execution
-    const toolCallPromises = toolCalls.map(async (toolCall) => {
+    const toolCallPromises = toolCalls.map(async (tool_call) => {
       // Handle both standard and custom tool calls
-      if (toolCall.type === 'function' && 'function' in toolCall) {
-        const tool_call: IToolCallInput = {
-          id: toolCall.id,
-          name: toolCall.function.name,
-          arguments: JSON.parse(toolCall.function.arguments || '{}') as Record<string, any>
-        };
-        const result = await this.run_tool(tool_call);
-        return { id: toolCall.id, result };
+      if (tool_call.type === 'function' && 'function' in tool_call) {
+        const result = await this.run_tool(tool_call.id, tool_call.function.name, tool_call.function.arguments);
+        return { id: tool_call.id, result };
       }
-      return null;
+      // Return error for invalid tool calls instead of null
+      const errorResult = ToolCallResult.error(
+        'unknown_tool',
+        tool_call.id,
+        this.threadId,
+        "InvalidToolType",
+        `Tool call type ${tool_call.type} is not supported`
+      );
+      return { id: tool_call.id, result: errorResult };
     });
 
     // Wait for all tool calls to complete
@@ -53,33 +55,45 @@ export class ToolCallRunner {
     
     // Populate the results object
     results.forEach(item => {
-      if (item) {
-        tool_calls[item.id] = item.result;
-      }
+      tool_calls[item.id] = item.result;
     });
     
     return tool_calls;
   }
 
-  async run_tool(toolCall: IToolCallInput): Promise<ToolCallResult> {
-    const tool_call_id = toolCall.id;
-    const tool_name = toolCall.name;
-    const tool_arguments = toolCall.arguments;
-    
-    console.log(`Running tool call id:${tool_call_id} name:${tool_name} with arguments ${JSON.stringify(tool_arguments)}`);
-    
+  // use direct types of toolCall.id, toolCall.function.name, toolCall.function.arguments
+  async run_tool(tool_call_id: string, tool_name: string, tool_arguments: string): Promise<ToolCallResult> {
     let result: ToolCallResult;
-    
-    if (tool_name === 'python_function_runner') {
-      result = await this.run_python_code_runner(tool_arguments);
-    } else if (['qb_data_schema_retriever', 'qb_data_size_retriever'].includes(tool_name)) {
-      result = await this.callInternalAPI(tool_name, tool_call_id, tool_arguments, false);
-    } else if(tool_name === 'qb_user_data_retriever') {
-      result = await this.validateThenRetrieve(tool_name, tool_call_id, tool_arguments);
-    } else {
-      throw new Error(`Tool ${tool_name} not found`);
+   
+    try {
+      const tool_arguments_json = JSON.parse(tool_arguments);
+      console.log(`Running tool call id:${tool_call_id} name:${tool_name} with arguments ${JSON.stringify(tool_arguments)}`);
+      
+      
+      if (tool_name === 'python_function_runner') {
+        result = await this.run_python_code_runner(tool_arguments_json);
+      } else if (['qb_data_schema_retriever', 'qb_data_size_retriever'].includes(tool_name)) {
+        result = await this.callInternalAPI(tool_name, tool_call_id, tool_arguments_json, false);
+      } else if(tool_name === 'qb_user_data_retriever') {
+        result = await this.validateThenRetrieve(tool_name, tool_call_id, tool_arguments_json);
+      } else {
+        result = ToolCallResult.error(
+          tool_name,
+          tool_call_id,
+          this.threadId,
+          "InvalidToolName",
+          `Tool ${tool_name} not found`
+        );
+      }
+    } catch (error) {
+      result = ToolCallResult.error(
+        tool_name,
+        tool_call_id,
+        this.threadId,
+        "ToolCallError",
+        error instanceof Error ? error.message : 'Unknown error occurred'
+      );
     }
-    
     if (result.status === "error") {
       console.error(`Tool ${tool_call_id} failed:`, result.toLogMessage());
       console.debug(`Detailed error info:`, result.toLoggableString());
@@ -91,7 +105,7 @@ export class ToolCallRunner {
     return result;
   }
   
-  private async validateThenRetrieve(toolName: string, toolCallId: string, toolArguments: Record<string, any>): Promise<ToolCallResult> {
+  public async validateThenRetrieve(toolName: string, toolCallId: string, toolArguments: Record<string, any>): Promise<ToolCallResult> {
     const result = await this.callInternalAPI(toolName, toolCallId, toolArguments, true);
     if (result.status === "success") {
       // create a task handle and create new ToolCallResult object to be returned 
@@ -113,7 +127,7 @@ export class ToolCallRunner {
   ): Promise<ToolCallResult> {
     try {
       const requestBody = {
-        cbid: this.userId.toString(),
+        cbid: this.cbProfileId.toString(),
         thread_id: this.threadId.toString(),
         tool_call_id: toolCallId,
         validate: validate,
