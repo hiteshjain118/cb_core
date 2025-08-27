@@ -105,7 +105,7 @@ export class ModelOutputParser {
   async get_output_with_should_retry(): Promise<{
     tool_call_results?: any;
     response_content?: string;
-    should_retry?: boolean;
+    should_retry: boolean;
     message?: ChatCompletionMessage;
   }> {
     if (this.error) {

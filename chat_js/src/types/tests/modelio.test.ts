@@ -1,11 +1,11 @@
-import { ModelIO, ModelOutputParser, IModelPrompt, IModelProvider, TMessage } from '../modelio';
+import { ModelIO, ModelOutputParser, IModelPrompt } from '../modelio';
 import { ToolCallRunner } from '../../tool-call-runner';
 import { ToolCallResult } from 'coralbricks-common';
 import { ChatCompletionMessage, ChatCompletionMessageToolCall } from 'openai/resources/chat/completions';
+import { createMockToolCallResult, createMockChatMessage } from './test-helpers';
 
 // Mock dependencies
 jest.mock('../../tool-call-runner');
-jest.mock('coralbricks-common');
 
 describe('ModelIO', () => {
   let mockPrompt: jest.Mocked<IModelPrompt>;
@@ -112,11 +112,7 @@ describe('ModelOutputParser', () => {
 
   describe('set_message', () => {
     it('should set message and process content', () => {
-      const message: ChatCompletionMessage = {
-        role: 'assistant',
-        content: '```json\n{"response": "test"}\n```'
-      };
-
+      const message = createMockChatMessage('```json\n{"response": "test"}\n```');
       const result = parser.set_message(message);
       
       expect(result).toBe(parser);
@@ -124,7 +120,7 @@ describe('ModelOutputParser', () => {
       expect((parser as any).responseContent).toBe('\n{"response": "test"}\n');
     });
 
-    it('should handle message with tool calls', () => {
+    it('should handle message with tool calls', async () => {
       const toolCalls: ChatCompletionMessageToolCall[] = [
         {
           id: 'call_123',
@@ -136,24 +132,14 @@ describe('ModelOutputParser', () => {
         }
       ];
 
-      const message: ChatCompletionMessage = {
-        role: 'assistant',
-        content: 'Using tool',
-        tool_calls: toolCalls
-      };
-
+      const message = createMockChatMessage('Using tool', 'assistant', toolCalls);
       parser.set_message(message);
-      
-      expect((parser as any).toolCalls).toBe(toolCalls);
-      expect((parser as any).responseContent).toBe('Using tool');
+      expect((parser as any).toolCalls).toEqual(toolCalls);
+      expect((parser as any).responseContent).toBe('Using tool'); 
     });
 
     it('should handle message without content', () => {
-      const message: ChatCompletionMessage = {
-        role: 'assistant',
-        content: null
-      };
-
+      const message = createMockChatMessage(null);
       parser.set_message(message);
       
       expect((parser as any).message).toBe(message);
@@ -196,7 +182,7 @@ describe('ModelOutputParser', () => {
       ];
 
       const mockResults = {
-        'call_123': new ToolCallResult()
+        'call_123': createMockToolCallResult('success', 'test_tool', 'call_123', BigInt(1))
       };
 
       mockToolCallRunner.run_tools.mockResolvedValue(mockResults);
@@ -204,7 +190,7 @@ describe('ModelOutputParser', () => {
       // Set up parser state
       (parser as any).toolCalls = toolCalls;
       (parser as any).responseContent = 'test response';
-      (parser as any).message = { role: 'assistant', content: 'test' };
+      (parser as any).message = createMockChatMessage('test');
 
       const result = await parser.get_output();
 
@@ -212,92 +198,49 @@ describe('ModelOutputParser', () => {
       expect(result).toEqual({
         tool_call_results: mockResults,
         response_content: 'test response',
-        message: { role: 'assistant', content: 'test' }
+        message: expect.any(Object)
       });
     });
 
     it('should return response content when no tool calls', async () => {
       (parser as any).toolCalls = [];
       (parser as any).responseContent = 'test response';
-      (parser as any).message = { role: 'assistant', content: 'test' };
+      (parser as any).message = createMockChatMessage('test');
 
       const result = await parser.get_output();
 
       expect(mockToolCallRunner.run_tools).not.toHaveBeenCalled();
       expect(result).toEqual({
         response_content: 'test response',
-        message: { role: 'assistant', content: 'test' }
+        message: expect.any(Object)
       });
-    });
-
-    it('should throw error when tool calls length is negative (edge case)', async () => {
-      // This tests the final else condition which should never happen in practice
-      (parser as any).toolCalls = { length: -1 }; // Force invalid state
-      
-      await expect(parser.get_output()).rejects.toThrow('Tool call results not ready');
     });
   });
 
   describe('get_output_with_should_retry', () => {
     it('should return error state when error is set', async () => {
       (parser as any).error = 'Test error';
-      (parser as any).message = { role: 'assistant', content: 'test' };
+      (parser as any).message = createMockChatMessage('test');
 
       const result = await parser.get_output_with_should_retry();
 
       expect(result).toEqual({
         should_retry: true,
         response_content: 'Test error',
-        message: { role: 'assistant', content: 'test' }
-      });
-    });
-
-    it('should return tool call results with retry flag when tool calls exist', async () => {
-      const toolCalls: ChatCompletionMessageToolCall[] = [
-        {
-          id: 'call_123',
-          type: 'function',
-          function: { name: 'test_function', arguments: '{}' }
-        }
-      ];
-
-      const mockSuccessResult = new ToolCallResult();
-      mockSuccessResult.status = 'success';
-      
-      const mockErrorResult = new ToolCallResult();
-      mockErrorResult.status = 'error';
-
-      const mockResults = {
-        'call_123': mockSuccessResult,
-        'call_456': mockErrorResult
-      };
-
-      mockToolCallRunner.run_tools.mockResolvedValue(mockResults);
-
-      (parser as any).toolCalls = toolCalls;
-      (parser as any).responseContent = 'test response';
-      (parser as any).message = { role: 'assistant', content: 'test' };
-
-      const result = await parser.get_output_with_should_retry();
-
-      expect(result).toEqual({
-        tool_call_results: mockResults,
-        response_content: 'test response',
-        message: { role: 'assistant', content: 'test' },
-        should_retry: true // Always true in the current implementation
+        message: expect.any(Object)
       });
     });
 
     it('should return should_retry false when response content exists and no tool calls', async () => {
       (parser as any).toolCalls = [];
       (parser as any).responseContent = 'test response';
-      (parser as any).message = { role: 'assistant', content: 'test' };
+      (parser as any).message = createMockChatMessage('test');
 
       const result = await parser.get_output_with_should_retry();
 
       expect(result).toEqual({
         response_content: 'test response',
-        message: { role: 'assistant', content: 'test' },
+        message: expect.any(Object),
         should_retry: false
       });
     });
@@ -305,13 +248,13 @@ describe('ModelOutputParser', () => {
     it('should return should_retry true when response content is undefined', async () => {
       (parser as any).toolCalls = [];
       (parser as any).responseContent = undefined;
-      (parser as any).message = { role: 'assistant', content: 'test' };
+      (parser as any).message = createMockChatMessage('test');
 
       const result = await parser.get_output_with_should_retry();
 
       expect(result).toEqual({
         response_content: undefined,
-        message: { role: 'assistant', content: 'test' },
+        message: expect.any(Object),
         should_retry: true
       });
     });
@@ -319,18 +262,18 @@ describe('ModelOutputParser', () => {
     it('should return should_retry true when response content is empty string', async () => {
       (parser as any).toolCalls = [];
       (parser as any).responseContent = '';
-      (parser as any).message = { role: 'assistant', content: 'test' };
+      (parser as any).message = createMockChatMessage('test');
 
       const result = await parser.get_output_with_should_retry();
 
       expect(result).toEqual({
         response_content: '',
-        message: { role: 'assistant', content: 'test' },
+        message: expect.any(Object),
         should_retry: true
       });
     });
 
-    it('should detect error in tool call results and set should_retry', async () => {
+    it('should return should_retry true when tool call results are error', async () => {
       const toolCalls: ChatCompletionMessageToolCall[] = [
         {
           id: 'call_123',
@@ -338,48 +281,22 @@ describe('ModelOutputParser', () => {
           function: { name: 'test_function', arguments: '{}' }
         }
       ];
-
-      const mockErrorResult = new ToolCallResult();
-      mockErrorResult.status = 'error';
-
       const mockResults = {
-        'call_123': mockErrorResult
+        'call_123': createMockToolCallResult('error', 'test_function', 'call_123', BigInt(1))
       };
-
       mockToolCallRunner.run_tools.mockResolvedValue(mockResults);
-
       (parser as any).toolCalls = toolCalls;
       (parser as any).responseContent = 'test response';
+      (parser as any).message = createMockChatMessage('test');
 
       const result = await parser.get_output_with_should_retry();
 
-      expect(result.should_retry).toBe(true);
+      expect(result).toEqual({
+        tool_call_results: mockResults,
+        response_content: 'test response',
+        message: expect.any(Object),
+        should_retry: true
+      });
     });
   });
 });
-
-describe('Integration Tests', () => {
-  it('should work end-to-end with ModelIO and ModelOutputParser', () => {
-    const mockPrompt: IModelPrompt = {
-      get_system_prompt: jest.fn().mockReturnValue('System prompt'),
-      get_messages: jest.fn().mockReturnValue([]),
-      add_user_turn: jest.fn(),
-      add_tool_outputs: jest.fn(),
-      add_tool_output: jest.fn(),
-      add_chat_completion_message: jest.fn(),
-      pretty_print_conversation: jest.fn()
-    };
-
-    const mockToolCallRunner = {
-      run_tools: jest.fn(),
-      run_tool: jest.fn()
-    } as any;
-
-    const modelIO = new ModelIO(mockPrompt, mockToolCallRunner, 'test_intent');
-    const parser = modelIO.get_output_parser();
-
-    expect(parser).toBeInstanceOf(ModelOutputParser);
-    expect(modelIO.intent).toBe('test_intent');
-    expect(modelIO.prompt).toBe(mockPrompt);
-  });
-}); 

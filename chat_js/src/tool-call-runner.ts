@@ -72,8 +72,10 @@ export class ToolCallRunner {
     
     if (tool_name === 'python_function_runner') {
       result = await this.run_python_code_runner(tool_arguments);
-    } else if (['qb_user_data_retriever', 'qb_data_schema_retriever', 'qb_data_size_retriever'].includes(tool_name)) {
-      result = await this.callInternalAPI(tool_name, tool_call_id, tool_arguments);
+    } else if (['qb_data_schema_retriever', 'qb_data_size_retriever'].includes(tool_name)) {
+      result = await this.callInternalAPI(tool_name, tool_call_id, tool_arguments, false);
+    } else if(tool_name === 'qb_user_data_retriever') {
+      result = await this.validateThenRetrieve(tool_name, tool_call_id, tool_arguments);
     } else {
       throw new Error(`Tool ${tool_name} not found`);
     }
@@ -88,16 +90,33 @@ export class ToolCallRunner {
     
     return result;
   }
+  
+  private async validateThenRetrieve(toolName: string, toolCallId: string, toolArguments: Record<string, any>): Promise<ToolCallResult> {
+    const result = await this.callInternalAPI(toolName, toolCallId, toolArguments, true);
+    if (result.status === "success") {
+      // create a task handle and create new ToolCallResult object to be returned 
+      // Schedule the retrieval task to run in the background
+
+      return await this.callInternalAPI(toolName, toolCallId, toolArguments, false);
+    }
+    return result;
+  }
 
   /**
    * Call the internal backend API for QB tools
    */
-  private async callInternalAPI(toolName: string, toolCallId: string, toolArguments: Record<string, any>): Promise<ToolCallResult> {
+  private async callInternalAPI(
+    toolName: string, 
+    toolCallId: string, 
+    toolArguments: Record<string, any>,
+    validate: boolean = false
+  ): Promise<ToolCallResult> {
     try {
       const requestBody = {
         cbid: this.userId.toString(),
         thread_id: this.threadId.toString(),
         tool_call_id: toolCallId,
+        validate: validate,
         ...toolArguments
       };
 
@@ -158,28 +177,9 @@ export class ToolCallRunner {
       return this.enabledTools;
     }
     
-    try {
-      const response = await axios.get(`${this.internalApiUrl}/tools`, {
-        headers: {
-          'X-Internal-Service': 'chat_js'
-        },
-        timeout: 10000
-      });
-
-      if (response.data.success && response.data.tools) {
-        // Backend now returns tools with function.name property
-        const toolNames = response.data.tools.map((tool: any) => tool.function.name);
-        // Add python_function_runner since backend doesn't implement it yet
-        this.enabledTools = [...toolNames, 'python_function_runner'];
-        return this.enabledTools;
-      } else {
-        throw new Error('Failed to fetch tools from internal API');
-      }
-    } catch (error) {
-      console.error('Error fetching tools:', error);
-      // Return basic tools as fallback
-      return ['python_function_runner'];
-    }
+    const enabledToolDescriptions = await this.get_enabled_tool_descriptions();
+    this.enabledTools = enabledToolDescriptions.map((tool) => tool.function.name);
+    return this.enabledTools;
   }
   
   async get_enabled_tool_descriptions(): Promise<Array<{
@@ -198,66 +198,41 @@ export class ToolCallRunner {
       return this.enabledToolDescriptions;
     }
     
-    try {
-      // Fetch tool descriptions from internal API
-      const response = await axios.get(`${this.internalApiUrl}/tools`, {
-        headers: {
-          'X-Internal-Service': 'chat_js'
-        },
-        timeout: 10000
-      });
+    const response = await axios.get(`${this.internalApiUrl}/tools`, {
+      headers: {
+        'X-Internal-Service': 'chat_js'
+      },
+      timeout: 10000
+    });
 
-      if (response.data.success && response.data.tools) {
-        // Backend now returns proper OpenAI tool format
-        const backendTools = response.data.tools;
-        
-        // Add python_function_runner manually since backend doesn't implement it yet
-        const pythonTool = {
-          type: "function" as const,
-          function: {
-            name: "python_function_runner",
-            description: "Executes Python code for data analysis",
-            parameters: {
-              type: "object",
-              properties: {
-                code: {
-                  type: "string",
-                  description: "Python code to execute"
-                }
-              },
-              required: ["code"]
-            }
-          }
-        };
-
-        // Cache the tool descriptions
-        this.enabledToolDescriptions = [...backendTools, pythonTool];
-        return this.enabledToolDescriptions;
-      } else {
-        throw new Error('Failed to fetch tools from internal API');
-      }
-    } catch (error) {
-      console.error('Error fetching tool descriptions:', error);
-      // Return basic tools as fallback
-      return [
-        {
-          type: "function" as const,
-          function: {
-            name: "python_function_runner",
-            description: "Executes Python code for data analysis",
-            parameters: {
-              type: "object",
-              properties: {
-                code: {
-                  type: "string",
-                  description: "Python code to execute"
-                }
-              },
-              required: ["code"]
-            }
+    if (response.data.success && response.data.tools) {
+      // Backend now returns proper OpenAI tool format
+      const backendTools = response.data.tools;
+      
+      // Add python_function_runner manually since backend doesn't implement it yet
+      const pythonTool = {
+        type: "function" as const,
+        function: {
+          name: "python_function_runner",
+          description: "Executes Python code for data analysis",
+          parameters: {
+            type: "object",
+            properties: {
+              code: {
+                type: "string",
+                description: "Python code to execute"
+              }
+            },
+            required: ["code"]
           }
         }
-      ];
+      };
+
+      // Cache the tool descriptions
+      this.enabledToolDescriptions = [...backendTools, pythonTool];
+      return this.enabledToolDescriptions;
     }
+
+    throw new Error('Failed to fetch tools from internal API, chat_js not available');
   }
 } 
