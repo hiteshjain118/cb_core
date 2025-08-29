@@ -1,0 +1,178 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  // Supabase specific settings
+  directUrl = env("DATABASE_URL")
+}
+
+model Profile {
+  id           BigInt   @id @default(dbgenerated("nextval('global_cb_profile_bigint_id')")) @db.BigInt
+  timeZone     String?  @map("time_zone")
+  createdAt    DateTime @default(now()) @map("created_at")
+  authUserId   String?  @unique @map("user_id")
+  firstName    String?  @map("first_name")
+  lastName     String?  @map("last_name")
+  email        String?  @map("email")
+  
+  // Relations
+  qboProfiles QboProfile[]
+  qboProfilesSandbox QboProfileSandbox[]
+  threads Thread[]
+  pipelines Pipeline[]
+  
+  @@map("profiles")
+}
+
+model User {
+  id        String    @id
+  email     String    @unique
+  role      String    @default("authenticated")
+  createdAt DateTime  @default(now()) @map("created_at")
+  
+  @@map("users")
+}
+
+// QBO Profile for Production Environment
+model QboProfile {
+  cbId                    BigInt   @id @map("cb_id") @default(dbgenerated("nextval('global_non_user_seq')")) @db.BigInt
+  ownerId                 BigInt   @map("owner_id") @db.BigInt
+  realmId                 String?  @map("realm_id")
+  accessToken             String?  @map("access_token")
+  refreshToken            String?  @map("refresh_token")
+  expiresIn               Int?     @map("expires_in")
+  refreshTokenExpiresIn   Int?     @map("refresh_token_expires_in")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  owner                   Profile  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  
+  @@map("qbo_profiles")
+}
+
+// QBO Profile for Sandbox Environment
+model QboProfileSandbox {
+  cbId                    BigInt   @id @map("cb_id") @default(dbgenerated("nextval('global_non_user_seq')")) @db.BigInt
+  ownerId                 BigInt   @map("owner_id") @db.BigInt
+  realmId                 String?  @map("realm_id")
+  accessToken             String?  @map("access_token")
+  refreshToken            String?  @map("refresh_token")
+  expiresIn               Int?     @map("expires_in")
+  refreshTokenExpiresIn   Int?     @map("refresh_token_expires_in")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+  
+  // Relations
+  owner                   Profile  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  
+  @@map("qbo_profiles_sandbox")
+}
+
+model Thread {
+  cbId                    BigInt   @id @map("cb_id") @default(dbgenerated("nextval('global_non_user_seq')")) @db.BigInt
+  ownerId                 BigInt   @map("owner_id") @db.BigInt
+  createdAt               DateTime @default(now()) @map("created_at")
+  
+  // Relations
+  owner                   Profile  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  pipelines               Pipeline[]
+  messages                Message[]
+  
+  @@map("threads")
+}
+
+model TableAttachment {
+  cbId                    BigInt   @id @map("cb_id") @default(dbgenerated("nextval('global_non_user_seq')")) @db.BigInt
+  messageId               BigInt   @map("message_id") @db.BigInt
+  createdAt               DateTime @default(now()) @map("created_at")  
+  columns                 Json    @map("columns")
+  rows                    Json    @map("rows")
+  
+  // Relations
+  message                 Message  @relation(fields: [messageId], references: [cbId], onDelete: Cascade)
+  
+  @@map("table_attachments")
+}
+
+model Message {
+  cbId                    BigInt   @id @map("cb_id") @default(dbgenerated("nextval('global_non_user_seq')")) @db.BigInt
+  threadId                BigInt   @map("thread_id") @db.BigInt
+  createdAt               DateTime @default(now()) @map("created_at")
+  senderId                BigInt   @map("sender_id") @db.BigInt
+  receiverId              BigInt   @map("receiver_id") @db.BigInt
+  body                    String   @map("body") @db.Text
+  
+  // Relations
+  tableAttachments        TableAttachment[]
+  thread                  Thread   @relation(fields: [threadId], references: [cbId], onDelete: Cascade)
+ 
+  @@map("messages")
+}
+
+model Pipeline {
+  cbId                    BigInt   @id @map("cb_id") @default(dbgenerated("nextval('global_non_user_seq')")) @db.BigInt
+  ownerId                 BigInt   @map("owner_id") @db.BigInt
+  parentThreadId          BigInt?  @map("parent_thread_id") @db.BigInt
+  createdAt               DateTime @default(now()) @map("created_at")
+  name                    String?  @map("name") @db.Text
+  
+  // Relations
+  owner                   Profile  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  parentThread            Thread?  @relation(fields: [parentThreadId], references: [cbId], onDelete: SetNull)
+  
+  @@map("pipelines")
+}
+
+// Only the ModelEvent table - standalone, no relations to existing tables
+model ModelEvent {
+  cbId           BigInt   @id @map("cb_id") @default(dbgenerated("nextval('global_non_user_seq')")) @db.BigInt
+  systemPrompt   String?  @map("system_prompt") @db.Text
+  toolCalls      Json?    @map("tool_calls")
+  responseContent String? @map("response_content") @db.Text
+  inputPrompt    Json?    @map("input_prompt")
+  createdAt      DateTime @default(now()) @map("created_at")
+  threadId       BigInt?  @map("thread_id") @db.BigInt
+  senderId       BigInt?  @map("sender_id") @db.BigInt
+  modelId        String?  @map("model_id")
+  cbProfileId    BigInt?  @map("cb_profile_id") @db.BigInt
+  assistantMessageId BigInt? @map("assistant_message_id") @db.BigInt
+
+  // Relations
+  tasks          Task[]
+
+  @@map("model_events")
+  @@index([threadId], name: "idx_model_events_thread_id")
+  @@index([senderId], name: "idx_model_events_sender_id")
+  @@index([cbProfileId], name: "idx_model_events_cb_profileId")
+}
+
+model Task {
+  cbId                    BigInt   @id @map("cb_id") @default(dbgenerated("nextval('global_non_user_seq')")) @db.BigInt
+  threadId                BigInt   @map("thread_id") @db.BigInt
+  createdAt               DateTime @default(now()) @map("created_at")
+  toolCallId              String   @map("tool_call_id") @db.Text
+  toolCallName            String   @map("tool_call_name") @db.Text
+  toolCallArgs            Json     @map("tool_call_args")
+  handleForModel          String   @map("handle_for_model") @db.Text
+  requestModelEventId     BigInt   @map("request_model_event_id") @db.BigInt
+
+  // Self-referencing relation for dependencies
+  deps                    Task[]   @relation("TaskDependencies")
+  dependents              Task[]   @relation("TaskDependencies")
+
+  // Relations
+  requestModelEvent       ModelEvent? @relation(fields: [requestModelEventId], references: [cbId])
+
+  @@map("tasks")
+  @@index([threadId], name: "idx_tasks_thread_id")
+}
