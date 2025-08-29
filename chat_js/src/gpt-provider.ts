@@ -65,7 +65,7 @@ export class GPTProvider implements IModelProvider {
     }
   }
 
-  get_model_name(): string {
+  get_model_id(): string {
     return this.model;
   }
 

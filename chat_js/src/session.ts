@@ -2,27 +2,89 @@ import { ChatIntentName, ChatSlotName, SenderType } from "./types/enums";
 import { ChatMessage } from "./types/implementations";
 import { ChatMemory } from "./types/memory";
 import { INTENT_REGISTRY } from "./types/intent-registry";
-import { IntentServerInput } from "./types/intent-server";
+import { AssistantToUserMessageSender, IntentServerInput } from "./types/intent-server";
+import { WebSocket } from 'ws';
+import { ModelIO } from "./types/modelio";
+import { ToolCallRunner } from "./tool-call-runner";
+import { QBServerSuccessPrompt } from "./qb-server-success-prompt";
+import { QBServer } from "./qb-server";
 
-class Session {
+class Session implements AssistantToUserMessageSender {
   private threadId: bigint;
   private userId: bigint;
-  private memory: ChatMemory;
   private createdAt: Date;
+  private ws: WebSocket;
+  // have history in DB
+  public modelIO: ModelIO;
+  private memory: ChatMemory;
   
-  constructor(threadId: bigint, userId: bigint, createdAt: Date) {
+  constructor(threadId: bigint, userId: bigint, createdAt: Date, ws: WebSocket) {
     this.threadId = threadId;
     this.userId = userId;
     this.memory = new ChatMemory(this.userId);
     this.createdAt = createdAt;
+    this.ws = ws;
+    this.modelIO = QBServer.create_model_io(this.threadId, this.userId);
   }
   
   getMemory(): ChatMemory {
     return this.memory;
   }
   
+  async handleAssistantMessage(
+    intent_server_cbid: bigint,
+    body: string,
+    sender_type: SenderType,
+    intent_name: ChatIntentName,
+    slots: Record<ChatSlotName, any>,
+  ) : Promise<bigint> {
+    // send message to user on the websocket connection
+
+    const assistantTurn = new ChatMessage(
+      BigInt(0),
+      this.threadId,
+      Date.now(),
+      intent_server_cbid,
+      this.userId,
+      body,
+      sender_type,
+      intent_name,
+      slots,
+    );
+    const assistant_to_user_message_cbId = await this.memory.addMessage(assistantTurn);
+      
+    console.log(`Sending assistant message to user ${this.userId} in thread ${this.threadId}: ${assistantTurn.body} with cbId: ${assistant_to_user_message_cbId}`);
+    this.ws.send(JSON.stringify({
+      type: 'chat',
+      userId: this.userId.toString(),
+      threadId: this.threadId.toString(),
+      message: assistantTurn.body,
+      timestamp: new Date().toISOString()
+    }));
+    return assistant_to_user_message_cbId;
+  }
+  
+  async handleUserMessage(message: string) {
+    // Send delivery receipt to client
+    console.log(`Sending delivery receipt to client for thread ${this.threadId}...`);
+    this.ws.send(JSON.stringify({
+      type: 'message_received',
+      userId: this.userId.toString(),
+      threadId: this.threadId.toString(),
+      messageId: Date.now().toString(),
+      timestamp: new Date().toISOString()
+    }));
+    
+    // Handle message processing in background
+    setImmediate(async () => {
+      // try {
+      console.log(`Scheduled to handle user message for thread ${this.threadId}...`);
+      await this.sendUserMessageToIntentServer(message);
+    });
+  }
+
   // Handle chat messages with intent classification and memory management
-  async handleUserMessage(body: string) {
+  async sendUserMessageToIntentServer(body: string) : Promise<void> {
     try {
       // Classify intent and get appropriate server
       // For now, we'll use a simple intent detection
@@ -38,7 +100,6 @@ class Session {
       
       // write message to db and get messageId = cbId
       const user_to_assistant_message_cbId = BigInt(123);
-      const assistant_to_user_message_cbId = BigInt(456);
       const userTurn = new ChatMessage(
         user_to_assistant_message_cbId,
         this.threadId,
@@ -48,32 +109,27 @@ class Session {
         body,
         SenderType.USER,
         detectedIntent,
-        {} as Record<ChatSlotName, any>
+        {} as Record<ChatSlotName, any>,
       );
       
       // Add to memory
-      this.memory.addMessage(userTurn);
+      await this.memory.addMessage(userTurn);
       // Create intent server input
       const inputData = new IntentServerInput(
         this.threadId,
         this.userId,
         userTurn,
-        this.memory
+        this.memory,
+        this,
+        this.modelIO
       );
       
       console.log(`Input data: ${inputData}, calling intent server: ${ChatIntentName.QB}, ${INTENT_REGISTRY.getAllIntents()}`);
       
-      const intent_server_output = await intentServer.serve(inputData);
-      console.log(`Response: ${intent_server_output}, ${INTENT_REGISTRY.getAllIntents()}`);
-        
-      
-      this.memory.addMessage(intent_server_output.assistantTurn);
-      
-      return intent_server_output.assistantTurn.body;
+      await intentServer.serve(inputData);
     } catch (error) {
       // print more info about error
       console.error('Error handling chat message:', error instanceof Error ? error.stack : error, INTENT_REGISTRY.getAllIntents());
-      return null;
     }
   }
 }

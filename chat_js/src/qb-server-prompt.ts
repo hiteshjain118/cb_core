@@ -3,6 +3,22 @@ import { ToolCallResult } from 'coralbricks-common';
 
 export class QBServerPrompt implements IModelPrompt {
 
+  get_json_conversation_after_system_prompt(): string {
+    return ""
+  }
+
+  get_messages(): Array<{
+    role: 'system' | 'user' | 'assistant' | 'tool';
+    content: string;
+  }> {
+    return [
+      {
+        role: 'system',
+        content: this.get_system_prompt()
+      }
+    ];
+  }
+
   get_system_prompt(): string {
     const currentDate = new Date().toISOString().slice(0, 19).replace('T', ' ');
     
@@ -206,19 +222,6 @@ export class QBServerPrompt implements IModelPrompt {
     );
   }
 
-  get_messages(): Array<{
-    role: 'system' | 'user' | 'assistant' | 'tool';
-    content: string;
-    tool_call_id?: string;
-    name?: string;
-  }> {
-    return [
-      {
-        role: 'system',
-        content: this.get_system_prompt()
-      }
-    ];
-  }
 
   add_user_turn(userTurn: TMessage): void {
     // Implementation will be in subclasses

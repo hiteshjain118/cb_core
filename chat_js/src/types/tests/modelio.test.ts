@@ -15,6 +15,7 @@ describe('ModelIO', () => {
   beforeEach(() => {
     mockPrompt = {
       get_system_prompt: jest.fn(),
+      get_json_conversation_after_system_prompt: jest.fn(),
       get_messages: jest.fn(),
       add_user_turn: jest.fn(),
       add_tool_outputs: jest.fn(),
@@ -171,7 +172,7 @@ describe('ModelOutputParser', () => {
     });
   });
 
-  describe('get_output', () => {
+  describe('get_output_with_should_loop_model', () => {
     it('should return tool call results when tool calls exist', async () => {
       const toolCalls: ChatCompletionMessageToolCall[] = [
         {
@@ -192,13 +193,14 @@ describe('ModelOutputParser', () => {
       (parser as any).responseContent = 'test response';
       (parser as any).message = createMockChatMessage('test');
 
-      const result = await parser.get_output();
+      const result = await parser.get_output_with_should_loop_model();
 
       expect(mockToolCallRunner.run_tools).toHaveBeenCalledWith(toolCalls);
       expect(result).toEqual({
         tool_call_results: mockResults,
         response_content: 'test response',
-        message: expect.any(Object)
+        message: expect.any(Object),
+        should_loop_model: true
       });
     });
 
@@ -207,73 +209,74 @@ describe('ModelOutputParser', () => {
       (parser as any).responseContent = 'test response';
       (parser as any).message = createMockChatMessage('test');
 
-      const result = await parser.get_output();
+      const result = await parser.get_output_with_should_loop_model();
 
       expect(mockToolCallRunner.run_tools).not.toHaveBeenCalled();
       expect(result).toEqual({
         response_content: 'test response',
-        message: expect.any(Object)
+        message: expect.any(Object),
+        should_loop_model: false
       });
     });
   });
 
-  describe('get_output_with_should_retry', () => {
+  describe('get_output_with_should_loop_model error and retry cases', () => {
     it('should return error state when error is set', async () => {
       (parser as any).error = 'Test error';
       (parser as any).message = createMockChatMessage('test');
 
-      const result = await parser.get_output_with_should_retry();
+      const result = await parser.get_output_with_should_loop_model();
 
       expect(result).toEqual({
-        should_retry: true,
+        should_loop_model: true,
         response_content: 'Test error',
         message: expect.any(Object)
       });
     });
 
-    it('should return should_retry false when response content exists and no tool calls', async () => {
+    it('should return should_loop_model false when response content exists and no tool calls', async () => {
       (parser as any).toolCalls = [];
       (parser as any).responseContent = 'test response';
       (parser as any).message = createMockChatMessage('test');
 
-      const result = await parser.get_output_with_should_retry();
+      const result = await parser.get_output_with_should_loop_model();
 
       expect(result).toEqual({
         response_content: 'test response',
         message: expect.any(Object),
-        should_retry: false
+        should_loop_model: false
       });
     });
 
-    it('should return should_retry true when response content is undefined', async () => {
+    it('should return should_loop_model true when response content is undefined', async () => {
       (parser as any).toolCalls = [];
       (parser as any).responseContent = undefined;
       (parser as any).message = createMockChatMessage('test');
 
-      const result = await parser.get_output_with_should_retry();
+      const result = await parser.get_output_with_should_loop_model();
 
       expect(result).toEqual({
         response_content: undefined,
         message: expect.any(Object),
-        should_retry: true
+        should_loop_model: true
       });
     });
 
-    it('should return should_retry true when response content is empty string', async () => {
+    it('should return should_loop_model true when response content is empty string', async () => {
       (parser as any).toolCalls = [];
       (parser as any).responseContent = '';
       (parser as any).message = createMockChatMessage('test');
 
-      const result = await parser.get_output_with_should_retry();
+      const result = await parser.get_output_with_should_loop_model();
 
       expect(result).toEqual({
         response_content: '',
         message: expect.any(Object),
-        should_retry: true
+        should_loop_model: true
       });
     });
 
-    it('should return should_retry true when tool call results are error', async () => {
+    it('should return should_loop_model true when tool calls exist regardless of success/error', async () => {
       const toolCalls: ChatCompletionMessageToolCall[] = [
         {
           id: 'call_123',
@@ -289,13 +292,13 @@ describe('ModelOutputParser', () => {
       (parser as any).responseContent = 'test response';
       (parser as any).message = createMockChatMessage('test');
 
-      const result = await parser.get_output_with_should_retry();
+      const result = await parser.get_output_with_should_loop_model();
 
       expect(result).toEqual({
         tool_call_results: mockResults,
         response_content: 'test response',
         message: expect.any(Object),
-        should_retry: true
+        should_loop_model: true
       });
     });
   });

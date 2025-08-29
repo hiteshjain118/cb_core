@@ -1,5 +1,6 @@
 import { IChatMessage } from './structs';
 import { ChatSlotName, SenderType } from './enums';
+import { PrismaService } from 'coralbricks-common';
 
 export interface IChatMemory {
   userId: bigint;
@@ -26,13 +27,15 @@ export class ChatMemory implements IChatMemory {
 
   constructor(public userId: bigint) {}
 
-  addMessage(message: IChatMessage): void {
+  async addMessage(message: IChatMessage): Promise<bigint>   {
+    message.cbId = await this.set_message_in_db(message);
     this.conversationHistory.push(message);
     
     // Update slots from message if they exist
     if (message.slots) {
       this.slots = { ...this.slots, ...message.slots };
     }
+    return message.cbId;
   }
 
   getConversationHistory(): IChatMessage[] {
@@ -136,5 +139,17 @@ export class ChatMemory implements IChatMemory {
       .join(', ');
     
     return `User ID: ${this.userId} messages: ${this.conversationHistory.length} slots: {${slotsStr}}`;
+  }
+  async set_message_in_db(message: IChatMessage): Promise<bigint> {
+    const prisma_client = PrismaService.getInstance();
+    const message_in_db = await prisma_client.message.create({
+      data: {
+        threadId: message.threadId,
+        senderId: message.senderId,
+        receiverId: message.receiverId,
+        body: message.body,
+      },
+    });
+    return message_in_db.cbId;
   }
 }

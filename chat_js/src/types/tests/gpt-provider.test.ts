@@ -108,16 +108,16 @@ describe('GPTProvider', () => {
     });
   });
 
-  describe('get_model_name', () => {
-    it('should return the correct model name', () => {
-      expect(gptProvider.get_model_name()).toBe(mockModel);
+  describe('get_model_id', () => {
+    it('should return the correct model id', () => {
+      expect(gptProvider.get_model_id()).toBe(mockModel);
     });
 
-    it('should return custom model name when specified', () => {
+    it('should return custom model id when specified', () => {
       const customModel = 'gpt-3.5-turbo';
       const customProvider = new GPTProvider(mockApiKey, customModel);
       
-      expect(customProvider.get_model_name()).toBe(customModel);
+      expect(customProvider.get_model_id()).toBe(customModel);
     });
   });
 

@@ -43,11 +43,13 @@ export class QBServerSuccessPrompt extends QBServerPrompt {
     this.append_to_conversation_log();
   }
 
+  get_json_conversation_after_system_prompt(): string {
+    return JSON.stringify(this.messages.slice(1));
+  }
+
   get_messages(): Array<{
-    role: 'system' | 'user' | 'assistant' | 'tool';
-    content: string;
-    tool_call_id?: string;
-    name?: string;
+      role: 'system' | 'user' | 'assistant' | 'tool';
+      content: string;
   }> {
     return this.messages;
   }
@@ -69,6 +71,16 @@ export class QBServerSuccessPrompt extends QBServerPrompt {
   }
 
   add_chat_completion_message(message: any): void {
+    if (!message) {
+      console.warn('Attempted to add null/undefined message to conversation');
+      return;
+    }
+    
+    if (!message.role) {
+      console.warn('Attempted to add message without role property:', message);
+      return;
+    }
+    
     this.messages.push(message);
     this.append_to_conversation_log();
   }
@@ -80,6 +92,16 @@ export class QBServerSuccessPrompt extends QBServerPrompt {
     
     let message_count = 0;
     for (const message of this.messages) {
+      if (!message) {
+        console.warn('Found null/undefined message in conversation history');
+        continue;
+      }
+      
+      if (!message.role) {
+        console.warn('Found message without role property:', message);
+        continue;
+      }
+      
       if (message.role === 'system') {
         continue;
       }

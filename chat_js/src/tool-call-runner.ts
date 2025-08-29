@@ -3,6 +3,7 @@ import {
 } from 'coralbricks-common';
 import { ChatCompletionMessageCustomToolCall, ChatCompletionMessageToolCall } from 'openai/resources/chat/completions';
 import axios from 'axios';
+import { PrismaService, Task } from 'coralbricks-common';
 
 export class ToolCallRunner {
   private threadId: bigint;
@@ -21,6 +22,7 @@ export class ToolCallRunner {
       };
     };
   }>;
+  private tasks: Task[] = [];
   constructor(thread_id: bigint, cb_profile_id: bigint) {
     this.threadId = thread_id;
     this.cbProfileId = cb_profile_id;
@@ -36,7 +38,7 @@ export class ToolCallRunner {
     const toolCallPromises = toolCalls.map(async (tool_call) => {
       // Handle both standard and custom tool calls
       if (tool_call.type === 'function' && 'function' in tool_call) {
-        const result = await this.run_tool(tool_call.id, tool_call.function.name, tool_call.function.arguments);
+        const result = await this.run_tool(tool_call.id, tool_call.function.name, tool_call.function.arguments, null);
         return { id: tool_call.id, result };
       }
       // Return error for invalid tool calls instead of null
@@ -62,7 +64,12 @@ export class ToolCallRunner {
   }
 
   // use direct types of toolCall.id, toolCall.function.name, toolCall.function.arguments
-  async run_tool(tool_call_id: string, tool_name: string, tool_arguments: string): Promise<ToolCallResult> {
+  async run_tool(
+    tool_call_id: string, 
+    tool_name: string, 
+    tool_arguments: string,
+    requestModelEventId: bigint | null
+  ): Promise<ToolCallResult> {
     let result: ToolCallResult;
    
     try {
@@ -75,7 +82,7 @@ export class ToolCallRunner {
       } else if (['qb_data_schema_retriever', 'qb_data_size_retriever'].includes(tool_name)) {
         result = await this.callInternalAPI(tool_name, tool_call_id, tool_arguments_json, false);
       } else if(tool_name === 'qb_user_data_retriever') {
-        result = await this.validateThenRetrieve(tool_name, tool_call_id, tool_arguments_json);
+        result = await this.validateThenRetrieve(tool_name, tool_call_id, tool_arguments_json, requestModelEventId);
       } else {
         result = ToolCallResult.error(
           tool_name,
@@ -105,12 +112,26 @@ export class ToolCallRunner {
     return result;
   }
   
-  public async validateThenRetrieve(toolName: string, toolCallId: string, toolArguments: Record<string, any>): Promise<ToolCallResult> {
+  public async validateThenRetrieve(toolName: string, toolCallId: string, toolArguments: Record<string, any>, requestModelEventId: bigint | null): Promise<ToolCallResult> {
     const result = await this.callInternalAPI(toolName, toolCallId, toolArguments, true);
     if (result.status === "success") {
       // create a task handle and create new ToolCallResult object to be returned 
       // Schedule the retrieval task to run in the background
-
+      const prisma_client = PrismaService.getInstance()
+      const handleForModel = toolName + "_" + toolCallId;
+      const task = await prisma_client.task.create({
+        data: {
+          threadId: this.threadId,
+          toolCallId: toolCallId,
+          toolCallName: toolName,
+          toolCallArgs: toolArguments,
+          handleForModel: handleForModel,
+          requestModelEventId: requestModelEventId || undefined,
+          deps: this.tasks.length > 0 ? { connect: this.tasks.map(task => ({ cbId: task.cbId })) } : undefined
+        }
+      })
+      console.log(`Created task ${task.cbId} for tool call ${toolCallId}`);
+      this.tasks.push(task);
       return await this.callInternalAPI(toolName, toolCallId, toolArguments, false);
     }
     return result;

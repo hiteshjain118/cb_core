@@ -1,3 +1,6 @@
+// Mock PrismaService before importing ToolCallRunner
+jest.mock('../../services/prismaService');
+
 import { ToolCallRunner } from '../../tool-call-runner';
 import { ToolCallResult, IToolCallInput } from 'coralbricks-common';
 import { ChatCompletionMessageToolCall } from 'openai/resources/chat/completions';
@@ -37,6 +40,23 @@ describe('ToolCallRunner', () => {
     jest.spyOn(console, 'log').mockImplementation();
     jest.spyOn(console, 'debug').mockImplementation();
     jest.spyOn(console, 'error').mockImplementation();
+
+    // Mock PrismaService
+    const mockPrismaService = require('../../services/prismaService').default;
+    mockPrismaService.getInstance.mockReturnValue({
+      task: {
+        create: jest.fn().mockResolvedValue({
+          cbId: BigInt(999),
+          threadId: BigInt(123),
+          createdAt: new Date(),
+          toolCallId: 'test_call_123',
+          toolCallName: 'test_tool',
+          toolCallArgs: {},
+          handleForModel: 'test_model',
+          requestModelEventId: BigInt(789)
+        })
+      }
+    });
 
     // Create ToolCallRunner instance
     toolCallRunner = new ToolCallRunner(mockThreadId, mockCbProfileId);
@@ -230,7 +250,8 @@ describe('ToolCallRunner', () => {
       const result = await toolCallRunner.run_tool(
         'python_call',
         'python_function_runner', 
-        '{"code": "print(\\"Hello World\\")"}'
+        '{"code": "print(\\"Hello World\\", null)"}',
+        null
       );
 
       expect(result).toBeInstanceOf(ToolCallResult);
@@ -248,7 +269,8 @@ describe('ToolCallRunner', () => {
       const result = await toolCallRunner.run_tool(
         'python_call',
         'python_function_runner',
-        '{}'
+        '{}',
+        null
       );
 
       expect(result).toBeInstanceOf(ToolCallResult);
@@ -275,7 +297,8 @@ describe('ToolCallRunner', () => {
       const result = await toolCallRunner.run_tool(
         'schema_call',
         'qb_data_schema_retriever',
-        '{"table": "customers"}'
+        '{"table": "customers"}',
+        null
       );
 
       expect(result).toBeInstanceOf(ToolCallResult);
@@ -308,7 +331,8 @@ describe('ToolCallRunner', () => {
       const result = await toolCallRunner.run_tool(
         'size_call',
         'qb_data_size_retriever',
-        '{"query": "SELECT COUNT(*) FROM customers"}'
+        '{"query": "SELECT COUNT(*) FROM customers"}',
+        null
       );
 
       expect(result).toBeInstanceOf(ToolCallResult);
@@ -354,7 +378,7 @@ describe('ToolCallRunner', () => {
         'user_call',
         'qb_user_data_retriever',
         '{"query": "SELECT * FROM users"}'
-      );
+      , null);
 
       expect(result).toBeInstanceOf(ToolCallResult);
       expect(result.status).toBe('success');
@@ -378,7 +402,7 @@ describe('ToolCallRunner', () => {
         'user_call',
         'qb_user_data_retriever',
         '{"query": "INVALID SQL"}'
-      );
+      , null);
 
       expect(result).toBeInstanceOf(ToolCallResult);
       expect(result.status).toBe('error');
@@ -390,7 +414,7 @@ describe('ToolCallRunner', () => {
         'unknown_call',
         'unknown_tool',
         '{}'
-      );
+      , null);
 
       expect(result).toBeInstanceOf(ToolCallResult);
       expect(result.status).toBe('error');
@@ -402,7 +426,8 @@ describe('ToolCallRunner', () => {
       await toolCallRunner.run_tool(
         'python_call',
         'python_function_runner',
-        '{"code": "print(\\"test\\")"}'
+        '{"code": "print(\\"test\\", null)"}',
+        null
       );
 
       expect(console.log).toHaveBeenCalledWith(
@@ -416,7 +441,7 @@ describe('ToolCallRunner', () => {
         'unknown_call',
         'unknown_tool',
         '{}'
-      );
+      , null);
 
       expect(console.error).toHaveBeenCalledWith(
         expect.stringContaining('Tool unknown_call failed:'),
@@ -429,7 +454,7 @@ describe('ToolCallRunner', () => {
         'parse_error_call',
         'python_function_runner',
         '{"code": "print(\\"test\\"", invalid_json}'
-      );
+      , null);
 
       expect(result).toBeInstanceOf(ToolCallResult);
       expect(result.status).toBe('error');
@@ -452,7 +477,8 @@ describe('ToolCallRunner', () => {
       await toolCallRunner.run_tool(
         'success_call',
         'python_function_runner',
-        '{"code": "print(\\"success\\")"}'
+        '{"code": "print(\\"success\\", null)"}',
+        null
       );
 
       expect(mockToLogMessage).toHaveBeenCalled();
@@ -479,7 +505,7 @@ describe('ToolCallRunner', () => {
         'error_call',
         'unknown_tool',
         '{}'
-      );
+      , null);
 
       expect(mockToLogMessage).toHaveBeenCalled();
       expect(mockToLoggableString).toHaveBeenCalled();
@@ -524,7 +550,7 @@ describe('ToolCallRunner', () => {
         'test_call',
         'qb_user_data_retriever',
         '{"query": "SELECT * FROM test"}'
-      );
+      , null);
 
       expect(mockedAxios.post).toHaveBeenCalledTimes(2);
       expect(result.status).toBe('success');
@@ -547,7 +573,7 @@ describe('ToolCallRunner', () => {
         'test_call',
         'qb_user_data_retriever',
         '{"query": "COMPLEX QUERY"}'
-      );
+      , null);
 
       expect(mockedAxios.post).toHaveBeenCalledTimes(1);
       expect(result.status).toBe('error');
@@ -562,7 +588,7 @@ describe('ToolCallRunner', () => {
         'api_call',
         'qb_data_schema_retriever',
         '{"table": "test"}'
-      );
+      , null);
 
       expect(result).toBeInstanceOf(ToolCallResult);
       expect(result.status).toBe('error');
@@ -587,7 +613,7 @@ describe('ToolCallRunner', () => {
         'validate_call',
         'qb_data_schema_retriever', 
         '{"table": "test_table"}'
-      );
+      , null);
 
       expect(mockedAxios.post).toHaveBeenCalledWith(
         `${mockInternalApiUrl}/qb_data_schema_retriever`,
@@ -817,7 +843,8 @@ describe('ToolCallRunner', () => {
       const result = await toolCallRunner.run_tool(
         'python_test',
         'python_function_runner',
-        '{"code": "import pandas as pd\\ndf = pd.DataFrame({\\"a\\": [1,2,3]})"}'
+        '{"code": "import pandas as pd\\ndf = pd.DataFrame({\\"a\\": [1,2,3]}, null)"}',
+        null
       );
 
       expect(result.status).toBe('success');
@@ -829,12 +856,226 @@ describe('ToolCallRunner', () => {
       const result = await toolCallRunner.run_tool(
         'python_no_code',
         'python_function_runner',
-        '{"name": "python_function_runner", "id": "python_no_code"}'
+        '{"name": "python_function_runner", "id": "python_no_code"}',
+        null
       );
 
       expect(result.status).toBe('error');
       expect(result.error_type).toBe('InvalidParameters');
       expect(result.error_message).toBe('Code is required');
+    });
+  });
+
+  describe('Task Creation', () => {
+    it('should create task when validateThenRetrieve is called with successful validation', async () => {
+      // Mock successful validation response
+      const mockValidationResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'test_call_123',
+          thread_id: mockThreadId,
+          content: { data: 'test_data' }
+        }
+      };
+
+      // Mock successful execution response
+      const mockExecutionResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'test_call_123',
+          thread_id: mockThreadId,
+          content: { data: 'executed_data' }
+        }
+      };
+
+      mockedAxios.post
+        .mockResolvedValueOnce(mockValidationResponse) // First call for validation
+        .mockResolvedValueOnce(mockExecutionResponse); // Second call for execution
+
+      const result = await toolCallRunner.validateThenRetrieve(
+        'qb_user_data_retriever',
+        'test_call_123',
+        { userId: 123, query: 'SELECT * FROM users' },
+        BigInt(789) // requestModelEventId
+      );
+
+      expect(result).toBeInstanceOf(ToolCallResult);
+      expect(result.status).toBe('success');
+      
+      // Verify that axios was called twice (validation + execution)
+      expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+      
+      // Check validation call
+      expect(mockedAxios.post).toHaveBeenNthCalledWith(
+        1,
+        `${mockInternalApiUrl}/qb_user_data_retriever`,
+        expect.objectContaining({
+          cbid: mockCbProfileId.toString(),
+          thread_id: mockThreadId.toString(),
+          tool_call_id: 'test_call_123',
+          validate: true,
+          userId: 123,
+          query: 'SELECT * FROM users'
+        }),
+        expect.any(Object)
+      );
+      
+      // Check execution call
+      expect(mockedAxios.post).toHaveBeenNthCalledWith(
+        2,
+        `${mockInternalApiUrl}/qb_user_data_retriever`,
+        expect.objectContaining({
+          cbid: mockCbProfileId.toString(),
+          thread_id: mockThreadId.toString(),
+          tool_call_id: 'test_call_123',
+          validate: false,
+          userId: 123,
+          query: 'SELECT * FROM users'
+        }),
+        expect.any(Object)
+      );
+    });
+
+    it('should not create task when validation fails', async () => {
+      // Mock failed validation response
+      const mockValidationResponse = {
+        data: {
+          status: 'error',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'test_call_123',
+          thread_id: mockThreadId,
+          error: 'Validation failed'
+        }
+      };
+
+      mockedAxios.post.mockResolvedValue(mockValidationResponse);
+
+      const result = await toolCallRunner.validateThenRetrieve(
+        'qb_user_data_retriever',
+        'test_call_123',
+        { userId: 123, query: 'SELECT * FROM users' },
+        BigInt(789) // requestModelEventId
+      );
+
+      expect(result).toBeInstanceOf(ToolCallResult);
+      expect(result.status).toBe('error');
+      
+      // Verify that axios was called only once (validation only)
+      expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+      expect(mockedAxios.post).toHaveBeenCalledWith(
+        `${mockInternalApiUrl}/qb_user_data_retriever`,
+        expect.objectContaining({
+          cbid: mockCbProfileId.toString(),
+          thread_id: mockThreadId.toString(),
+          tool_call_id: 'test_call_123',
+          validate: true,
+          userId: 123,
+          query: 'SELECT * FROM users'
+        }),
+        expect.any(Object)
+      );
+    });
+
+    it('should create task with correct parameters and dependencies', async () => {
+      // Mock successful validation response
+      const mockValidationResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'test_call_123',
+          thread_id: mockThreadId,
+          content: { data: 'test_data' }
+        }
+      };
+
+      // Mock successful execution response
+      const mockExecutionResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'test_call_123',
+          thread_id: mockThreadId,
+          content: { data: 'executed_data' }
+        }
+      };
+
+      mockedAxios.post
+        .mockResolvedValueOnce(mockValidationResponse)
+        .mockResolvedValueOnce(mockExecutionResponse);
+
+      // Add some existing tasks to test dependency creation
+      const existingTask = {
+        cbId: BigInt(111),
+        threadId: mockThreadId,
+        createdAt: new Date(),
+        toolCallId: 'existing_call',
+        toolCallName: 'existing_tool',
+        toolCallArgs: { existing: 'data' },
+        handleForModel: 'existing_model',
+        requestModelEventId: BigInt(222)
+      };
+      
+      // Mock the tasks array to simulate existing tasks
+      (toolCallRunner as any).tasks = [existingTask];
+
+      const result = await toolCallRunner.validateThenRetrieve(
+        'qb_user_data_retriever',
+        'test_call_123',
+        { userId: 123, query: 'SELECT * FROM users' },
+        BigInt(789) // requestModelEventId
+      );
+
+      expect(result).toBeInstanceOf(ToolCallResult);
+      expect(result.status).toBe('success');
+      
+      // Verify that the task was created with dependencies
+      expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+    });
+
+    it('should handle task creation with no existing dependencies', async () => {
+      // Mock successful validation response
+      const mockValidationResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'test_call_123',
+          thread_id: mockThreadId,
+          content: { data: 'test_data' }
+        }
+      };
+
+      // Mock successful execution response
+      const mockExecutionResponse = {
+        data: {
+          status: 'success',
+          tool_name: 'qb_user_data_retriever',
+          tool_call_id: 'test_call_123',
+          thread_id: mockThreadId,
+          content: { data: 'executed_data' }
+        }
+      };
+
+      mockedAxios.post
+        .mockResolvedValueOnce(mockValidationResponse)
+        .mockResolvedValueOnce(mockExecutionResponse);
+
+      // Ensure no existing tasks
+      (toolCallRunner as any).tasks = [];
+
+      const result = await toolCallRunner.validateThenRetrieve(
+        'qb_user_data_retriever',
+        'test_call_123',
+        { userId: 123, query: 'SELECT * FROM users' },
+        null // No requestModelEventId
+      );
+
+      expect(result).toBeInstanceOf(ToolCallResult);
+      expect(result.status).toBe('success');
+      
+      // Verify that the task was created without dependencies
+      expect(mockedAxios.post).toHaveBeenCalledTimes(2);
     });
   });
 }); 

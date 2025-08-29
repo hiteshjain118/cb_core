@@ -6,9 +6,8 @@ import './logger';
 
 import express from 'express';
 import http from 'http';
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocketServer } from 'ws';
 import cors from 'cors';
-import { v4 as uuidv4 } from 'uuid';
 import config from './config';
 
 // Import our TypeScript types directly from source
@@ -50,8 +49,6 @@ const conversationMemory = new Map();
 
 // WebSocket connection handling
 wss.on('connection', (ws, req) => {
-  const clientId = uuidv4();
-  
   // Parse query parameters to get threadId and userId
   if (!req.url) {
     console.error('No URL in WebSocket connection request');
@@ -69,20 +66,12 @@ wss.on('connection', (ws, req) => {
     return;
   }
   
-  console.log(`Client connected: ${clientId} for thread: ${threadId}, user: ${userId}`);
-  
-  // Store client connection with thread info
-  clients.set(clientId, {
-    ws,
-    threadId,
-    userId,
-    connected: true
-  });
+  console.log(`Client connected: ${userId} for thread: ${threadId}`);
   
   // Create or get existing session for this thread
   let session = sessions.get(threadId);
   if (!session) {
-    session = new Session(BigInt(threadId), BigInt(userId), new Date());
+    session = new Session(BigInt(threadId), BigInt(userId), new Date(), ws);
     sessions.set(threadId, session);
     console.log(`Created new session for thread: ${threadId}`);
   } else {
@@ -92,7 +81,8 @@ wss.on('connection', (ws, req) => {
   // Send welcome message
   ws.send(JSON.stringify({
     type: 'connection',
-    clientId: clientId,
+    // clientId: clientId,
+    userId: userId,
     threadId: threadId,
     message: 'Connected to chat server',
     timestamp: new Date().toISOString()
@@ -128,73 +118,8 @@ wss.on('connection', (ws, req) => {
         return;
       }
       
-      console.log(`Received from ${clientId} in thread ${threadId}:`, message);
-
-      // Send immediate acknowledgment to client
-      ws.send(JSON.stringify({
-        type: 'message_received',
-        clientId: clientId,
-        threadId: threadId,
-        messageId: message.messageId || Date.now().toString(),
-        timestamp: new Date().toISOString()
-      }));
-
-      // Process message asynchronously
-      const userMessageContent = message.body || message.message || JSON.stringify(message);
-      
-      // Handle message processing in background
-      setImmediate(async () => {
-        try {
-          console.log(`Processing message for thread ${threadId}...`);
-          const response = await session.handleUserMessage(userMessageContent);
-          console.log(`Response for thread ${threadId}: ${response}`);
-          
-          if (response) {
-            // Extract message content from response
-            let messageContent = response.body || response.message || response.content;
-            
-            // If no content found, the response might be the message itself
-            if (!messageContent && typeof response === 'string') {
-              messageContent = response;
-            }
-            
-            // If still no content, there might be an issue with the response format
-            if (!messageContent) {
-              console.warn(`No message content found in response:`, response);
-              messageContent = 'I received your message but had trouble generating a response.';
-            }
-            
-            console.log(`Sending AI response to client: ${messageContent}`);
-            
-            // Send AI response to client
-            ws.send(JSON.stringify({
-              type: 'chat',
-              clientId: clientId,
-              threadId: threadId,
-              message: messageContent,
-              timestamp: new Date().toISOString()
-            }));
-          } else {
-            console.error(`No response from session for thread ${threadId}`);
-            ws.send(JSON.stringify({
-              type: 'error',
-              clientId: clientId,
-              threadId: threadId,
-              message: 'AI agent is having issues processing your request',
-              timestamp: new Date().toISOString()
-            }));
-          }
-        } catch (error) {
-          console.error(`Error processing message for thread ${threadId}:`, error);
-          ws.send(JSON.stringify({
-            type: 'error',
-            clientId: clientId,
-            threadId: threadId,
-            message: 'An error occurred while processing your message',
-            timestamp: new Date().toISOString()
-          }));
-        }
-      });
+      console.log(`Received from ${userId} in thread ${threadId}:`, message);
+      session.handleUserMessage(message.body || message.message || JSON.stringify(message));
     } catch (error) {
       console.error('Error parsing message:', error);
       ws.send(JSON.stringify({
@@ -207,10 +132,10 @@ wss.on('connection', (ws, req) => {
   
   // Handle client disconnect
   ws.on('close', (code, reason) => {
-    console.log(`Client disconnected: ${clientId} from thread ${threadId}, code: ${code}, reason: ${reason}`);
+    console.log(`Client disconnected: ${userId} from thread ${threadId}, code: ${code}, reason: ${reason}`);
     
     // Remove client from clients map
-    clients.delete(clientId);
+    clients.delete(userId);
     
     // Check if this was the last client for this thread
     const threadClients = Array.from(clients.values()).filter(client => client.threadId === threadId);
@@ -222,8 +147,8 @@ wss.on('connection', (ws, req) => {
   
   // Handle errors
   ws.on('error', (error) => {
-    console.error(`WebSocket error for client ${clientId} in thread ${threadId}:`, error);
-    handleClientDisconnect(clientId);
+    console.error(`WebSocket error for client ${userId} in thread ${threadId}:`, error);
+    handleClientDisconnect(userId);
   });
 });
 
@@ -289,4 +214,72 @@ server.listen(config.port, () => {
     console.log(`Intent Server: ${config.intentServerEnabled ? 'Enabled' : 'Disabled'}`);
     console.log(`Default Intent: ${config.defaultIntent}`);
   }
+});
+
+// Graceful shutdown handling
+process.on('SIGINT', async () => {
+  console.log('\nReceived SIGINT, shutting down gracefully...');
+  
+  // Close WebSocket server
+  wss.close(() => {
+    console.log('WebSocket server closed');
+  });
+  
+  // Close HTTP server
+  server.close(() => {
+    console.log('HTTP server closed');
+  });
+  
+  // Cleanup Prisma connections
+  try {
+    const PrismaService = await import('./src/services/prismaService').catch(() => null);
+    if (PrismaService) {
+      await PrismaService.default.disconnect();
+      console.log('Prisma connections closed');
+    }
+  } catch (error) {
+    console.warn('Failed to cleanup Prisma service:', error);
+  }
+  
+  // Close all sessions
+  for (const session of sessions.values()) {
+    if (session.cleanup) {
+      await session.cleanup();
+    }
+  }
+  
+  console.log('Graceful shutdown complete');
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('\nReceived SIGTERM, shutting down gracefully...');
+  
+  // Same cleanup as SIGINT
+  wss.close(() => {
+    console.log('WebSocket server closed');
+  });
+  
+  server.close(() => {
+    console.log('HTTP server closed');
+  });
+  
+  try {
+    const PrismaService = await import('./src/services/prismaService').catch(() => null);
+    if (PrismaService) {
+      await PrismaService.default.disconnect();
+      console.log('Prisma connections closed');
+    }
+  } catch (error) {
+    console.warn('Failed to cleanup Prisma service:', error);
+  }
+  
+  for (const session of sessions.values()) {
+    if (session.cleanup) {
+      await session.cleanup();
+    }
+  }
+  
+  console.log('Graceful shutdown complete');
+  process.exit(0);
 });

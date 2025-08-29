@@ -47,6 +47,7 @@ export class ChatMessage implements IChatMessage {
     public senderType: SenderType,
     public intent: ChatIntentName,
     public slots?: Record<ChatSlotName, any>,
+    public modelEventId: bigint | null = null
   ) {
     this.cbId = cbId;
     this.threadId = threadId;
@@ -57,6 +58,7 @@ export class ChatMessage implements IChatMessage {
     this.intent = intent;
     this.slots = slots;
     this.senderType = senderType;
+    this.modelEventId = modelEventId;
   }
 
   addSlot(name: ChatSlotName, value: any): void {

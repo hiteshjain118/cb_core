@@ -1,30 +1,33 @@
 import { IChatMessage } from './structs';
-import { ChatSlotName, ChatIntentName } from './enums';
+import { ChatSlotName, ChatIntentName, SenderType } from './enums';
 import { ChatMemory } from './memory';
+import { ChatMessage } from './implementations';
+import { ModelIO } from './modelio';
 
+export interface AssistantToUserMessageSender {
+  handleAssistantMessage: (
+    intent_server_cbid: bigint,
+    body: string,
+    sender_type: SenderType,
+    intent_name: ChatIntentName,
+    slots: Record<ChatSlotName, any>
+  ) => Promise<bigint>;
+}
 
 export class IntentServerInput {
   constructor(
     public threadId: bigint,
     public userId: bigint,
     public userTurn: IChatMessage,
-    public chatMemory: ChatMemory
+    public chatMemory: ChatMemory,
+    public session: AssistantToUserMessageSender,
+    public modelIO: ModelIO,
   ) {}
   toString(): string {
     return `IntentServerInput(threadId: ${this.threadId}, userId: ${this.userId}, userTurn: ${this.userTurn}, chatMemory: ${this.chatMemory})`;
   }
 }
 
-export class IntentServerOutput {
-  constructor(
-    public threadId: bigint,
-    public userId: bigint,
-    public assistantTurn: IChatMessage
-  ) {}
-  toString(): string {
-    return `IntentServerOutput(threadId: ${this.threadId}, userId: ${this.userId}, assistantTurn: ${this.assistantTurn})`;
-  }
-}
 // Abstract Intent Server - similar to Python IIntentServer
 export abstract class IIntentServer {
   protected gatheredSlots: Record<ChatSlotName, any> = {} as Record<ChatSlotName, any>;
@@ -55,16 +58,16 @@ export abstract class IIntentServer {
     return requiredSlots.filter(slot => !(slot in this.gatheredSlots));
   }
 
-  async serve(input: IntentServerInput): Promise<IntentServerOutput> {
+  async serve(input: IntentServerInput): Promise<void> {
     console.log(`Serving intent: ${this.myIntent} with input: ${input}`);
     this.updateSlots(input.userTurn.slots || {} as Record<ChatSlotName, any>);
     
     const { canContinue, missingSlots } = this.canContinueWithRequest();
     if (canContinue) {
       const toolsOutput = await this.runTools(input);
-      return await this.useToolOutput(toolsOutput, input);
+      await this.useToolOutput(toolsOutput, input);
     } else {
-      return await this.handleMissingSlots(missingSlots, input);
+      await this.handleMissingSlots(missingSlots, input);
     }
   }
 
@@ -103,8 +106,8 @@ export abstract class IIntentServer {
 
   // Abstract methods that must be implemented by subclasses
   abstract runTools(input: IntentServerInput): Promise<any>;
-  abstract useToolOutput(toolsOutput: any, input: IntentServerInput): Promise<IntentServerOutput>;
-  abstract handleMissingSlots(missingSlots: ChatSlotName[], input: IntentServerInput): Promise<IntentServerOutput>;
+  abstract useToolOutput(toolsOutput: any, input: IntentServerInput): Promise<void>;
+  abstract handleMissingSlots(missingSlots: ChatSlotName[], input: IntentServerInput): Promise<void>;
   abstract get_cbId(): bigint;
 
   // Helper methods
